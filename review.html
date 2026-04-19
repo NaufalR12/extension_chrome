@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Review & Save Recording</title>
+  <link rel="stylesheet" href="review.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Review Bug Report</h1>
+    </div>
+
+    <div class="main-content">
+      <div class="left-panel">
+        <video id="videoPreview" controls autoplay></video>
+
+        <!-- LOGS VIEWER -->
+        <div class="logs-section">
+          <div class="tabs">
+            <div class="tab active" data-target="tabInfo">Info</div>
+            <div class="tab" data-target="tabConsole">Console</div>
+            <div class="tab" data-target="tabNetwork">Network</div>
+            <div class="tab" data-target="tabActions">Actions</div>
+            <div class="tab" data-target="tabBackend">Backend</div>
+          </div>
+          
+          <div class="panels">
+            <div id="tabInfo" class="panel active">
+              <p><strong>OS:</strong> <span id="infoOS">-</span></p>
+              <p><strong>Browser:</strong> <span id="infoBrowser">-</span></p>
+              <p><strong>Resolution:</strong> <span id="infoRes">-</span></p>
+              <p class="url-text"><strong>URL:</strong> <span id="infoUrl">-</span></p>
+            </div>
+            <div id="tabConsole" class="panel"><div id="consoleLogs" class="log-container"></div></div>
+            <div id="tabNetwork" class="panel"><div id="networkLogs" class="log-container"></div></div>
+            <div id="tabActions" class="panel"><div id="actionLogs" class="log-container"></div></div>
+            <div id="tabBackend" class="panel"><div id="backendLogs" class="log-container"></div></div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="right-panel">
+        <div id="stepForm">
+          <div class="form-group">
+            <label>Bug Title</label>
+            <input type="text" id="inputTitle" placeholder="e.g. Broken Login Button on Mobile">
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <textarea id="inputDesc" rows="6" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea>
+          </div>
+          <button id="btnSave" class="btn primary">Save to Google Drive</button>
+          <div id="loading" class="hidden">Uploading carefully... please wait!</div>
+          <div id="errorMsg" class="hidden error"></div>
+        </div>
+
+        <div id="stepSuccess" class="hidden">
+          <div class="success-icon">✅</div>
+          <h2>Successfully Uploaded!</h2>
+          <div class="form-group">
+            <label>Share Link (Google Drive)</label>
+            <input type="text" id="shareLink" readonly>
+            <button id="btnCopy" class="btn secondary mt-2">Copy Link</button>
+          </div>
+
+          <!-- MONDAY.COM MOCK REPORT SECTION -->
+          <div class="monday-box">
+            <h3>Report to Monday.com</h3>
+            <p><small>(Feature pending backend implementation)</small></p>
+            <input type="text" id="mondayBoardId" placeholder="Monday Board ID">
+            <button class="btn primary" disabled>Send Report</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="review.js"></script>
+</body>
+</html>

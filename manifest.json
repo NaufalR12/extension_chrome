@@ -1,0 +1,47 @@
+{
+  "manifest_version": 3,
+  "name": "Bug Reporting & Replay QATool",
+  "version": "1.0.0",
+  "description": "Alat perekam bug dengan integrasi Google Drive dan Monday.com",
+  "permissions": [
+    "storage",
+    "identity",
+    "activeTab",
+    "tabs",
+    "desktopCapture",
+    "scripting",
+    "alarms",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://www.googleapis.com/*",
+    "https://api.monday.com/v2"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Open Bug Reporter"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "oauth2": {
+    "client_id": "1061102325924-e59pl3dmo0646r2sqoadqvlr184knf9g.apps.googleusercontent.com",
+    "scopes": [
+      "https://www.googleapis.com/auth/drive.file"
+    ]
+  }
+}

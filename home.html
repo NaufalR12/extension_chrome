@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Bug Reporter - Dashboard</title>
+  <link rel="stylesheet" href="home.css">
+</head>
+<body>
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <h2>Bug Reporter</h2>
+    </div>
+    <ul class="nav-menu">
+      <li class="active" id="navMyBugs">My Bugs</li>
+      <li id="navSettings">Settings</li>
+    </ul>
+    <div class="sidebar-footer">
+      <div class="user-block">
+        <span id="userStatus" class="status-dot"></span>
+        <span id="userEmail">Loading...</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="main-content">
+    
+    <!-- MY BUGS VIEW -->
+    <div id="viewMyBugs" class="view-panel active">
+      <div class="view-header">
+        <h1>My Bugs</h1>
+        <button id="btnRefresh" class="btn secondary">Refresh</button>
+      </div>
+
+      <div id="loading" class="loading">Loading files from Google Drive...</div>
+      <div id="errorMsg" class="error hidden"></div>
+
+      <table class="bug-table hidden" id="bugTable">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Date</th>
+            <th>Assets</th>
+            <th class="actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="bugListBody">
+          <!-- Rows will be populated here -->
+        </tbody>
+      </table>
+    </div>
+
+    <!-- SETTINGS VIEW -->
+    <div id="viewSettings" class="view-panel hidden">
+      <div class="view-header">
+        <h1>Settings</h1>
+      </div>
+      <div class="settings-card">
+        <h3>Account Management</h3>
+        <p>You are currently authenticated and connected to Google Drive.</p>
+        <button id="btnLogout" class="btn danger">Logout & Revoke Access</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- EDIT MODAL -->
+  <div id="editModal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Edit Bug Report</h2>
+      
+      <div class="form-group">
+        <label>Title</label>
+        <input type="text" id="editTitle">
+      </div>
+      
+      <div class="form-group">
+        <label>Description</label>
+        <textarea id="editDesc" rows="5"></textarea>
+      </div>
+      
+      <div class="modal-actions">
+        <button id="btnCancelEdit" class="btn secondary">Cancel</button>
+        <button id="btnSaveEdit" class="btn primary">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DELETE MODAL -->
+  <div id="deleteModal" class="modal hidden">
+    <div class="modal-content text-center">
+      <h2>Are you sure?</h2>
+      <p>This will permanently delete the Video and JSON file from your Google Drive.</p>
+      <div class="modal-actions center mt-3">
+        <button id="btnCancelDelete" class="btn secondary">Cancel</button>
+        <button id="btnConfirmDelete" class="btn danger">Yes, Delete It</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="home.js"></script>
+</body>
+</html>

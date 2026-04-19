@@ -1,0 +1,259 @@
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', sans-serif;
+  background-color: #f8f9fa;
+  color: #202124;
+  width: 320px;
+}
+
+.app-container {
+  padding: 16px;
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e8eaed;
+  margin-bottom: 16px;
+}
+
+.logo-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.logo-icon {
+  font-size: 20px;
+}
+
+.logo-text {
+  font-weight: 700;
+  font-size: 15px;
+  color: #1a73e8;
+  letter-spacing: -0.3px;
+}
+
+.user-status {
+  font-size: 11px;
+  font-weight: 600;
+  color: #5f6368;
+  display: flex;
+  align-items: center;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  background-color: #34a853;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+
+/* Typography & Layout */
+.section {
+  display: flex;
+  flex-direction: column;
+}
+
+h2 {
+  font-size: 18px;
+  margin: 0 0 8px 0;
+  text-align: center;
+}
+
+p {
+  font-size: 13px;
+  color: #5f6368;
+  line-height: 1.4;
+  margin: 0 0 16px 0;
+  text-align: center;
+}
+
+/* Login */
+.login-illustration {
+  font-size: 48px;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.login-section {
+  padding: 24px 0 16px 0;
+}
+
+/* Grid & Cards */
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.action-card {
+  background: white;
+  border: 1px solid #e8eaed;
+  border-radius: 10px;
+  padding: 16px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.action-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.06);
+  border-color: #dadce0;
+}
+
+.action-card:active {
+  transform: translateY(0);
+}
+
+.card-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.card-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #3c4043;
+}
+
+/* Icon Colors */
+.blue { filter: hue-rotate(0deg); }
+.purple { filter: hue-rotate(250deg); }
+.gray { filter: grayscale(100%); opacity: 0.8; }
+
+/* Recording State */
+.recording-active {
+  border-color: #fce8e6;
+  background: #fff;
+  box-shadow: 0 0 0 2px #fce8e6;
+}
+
+.red { color: #d93025; }
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+.pulse {
+  animation: pulse 1.5s infinite;
+}
+
+/* Settings area */
+.settings-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: #9aa0a6;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.settings-divider::before, .settings-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid #e8eaed;
+}
+
+.settings-divider span {
+  padding: 0 10px;
+}
+
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setting-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3c4043;
+}
+
+.input-line {
+  display: flex;
+  gap: 8px;
+}
+
+.input-line input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.input-line input:focus {
+  border-color: #1a73e8;
+}
+
+/* Buttons */
+.btn {
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+  border: none;
+}
+
+.btn-large {
+  padding: 12px;
+  font-size: 14px;
+}
+
+.small-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.w-100 { width: 100%; }
+
+.primary-btn {
+  background-color: #1a73e8;
+  color: white;
+}
+
+.primary-btn:hover {
+  background-color: #1557b0;
+}
+
+.outline-btn {
+  background: transparent;
+  border: 1px solid #dadce0;
+  color: #1a73e8;
+}
+
+.outline-btn:hover {
+  background: #f8f9fa;
+  border-color: #1a73e8;
+}
+
+/* Utilities */
+.hidden { display: none !important; }
+
+.success-msg {
+  font-size: 11px;
+  color: #34a853;
+  margin-top: 4px;
+  font-weight: 500;
+}

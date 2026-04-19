@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Bug Reporter</title>
+  <link rel="stylesheet" href="popup.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <div class="header">
+      <div class="logo-container">
+        <div class="logo-icon">🐞</div>
+        <div class="logo-text">Bug Reporter</div>
+      </div>
+      <div class="user-status hidden" id="userStatusWrapper">
+        <span class="status-dot"></span> <span id="userStatus">Ready</span>
+      </div>
+    </div>
+    
+    <!-- Login State -->
+    <div id="loginSection" class="section login-section">
+      <div class="login-illustration">☁️</div>
+      <h2>Connect Drive</h2>
+      <p>Please authenticate with your Google account to enable cloud saving.</p>
+      <button id="btnLogin" class="btn primary-btn btn-large w-100">Login with Google</button>
+    </div>
+
+    <!-- Main State -->
+    <div id="mainSection" class="section hidden">
+      <div class="action-grid">
+        <button id="btnRecord" class="action-card">
+          <div class="card-icon blue">🎥</div>
+          <div class="card-label">Record</div>
+        </button>
+        <button id="btnStop" class="action-card hidden recording-active">
+          <div class="card-icon red pulse">⏹</div>
+          <div class="card-label">Stop</div>
+        </button>
+        
+        <button id="btnScreenshot" class="action-card">
+          <div class="card-icon purple">📸</div>
+          <div class="card-label">Screenshot</div>
+        </button>
+        
+        <button id="btnDashboard" class="action-card">
+          <div class="card-icon gray">📋</div>
+          <div class="card-label">Dashboard</div>
+        </button>
+      </div>
+
+      <div class="settings-divider">
+        <span>Settings</span>
+      </div>
+      
+      <div class="setting-group">
+        <label>Auto-delete Drive (Days)</label>
+        <div class="input-line">
+           <input type="number" id="inputAutoDelete" value="30">
+           <button id="btnSaveSettings" class="btn small-btn outline-btn">Save</button>
+        </div>
+        <div id="settingsMsg" class="success-msg hidden">Preferences Saved!</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
