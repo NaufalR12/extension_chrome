@@ -12,11 +12,41 @@
     </div>
 
     <div class="main-content">
-      <div class="left-panel">
-        <video id="videoPreview" controls autoplay></video>
+      <!-- POSISI ATAS: BUG DETAILS FORM -->
+      <div class="form-section">
+        <div id="stepForm">
+          <div class="form-group">
+            <label>Bug Title</label>
+            <input type="text" id="inputTitle" placeholder="e.g. Broken Login Button on Mobile">
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <textarea id="inputDesc" rows="3" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea>
+          </div>
+        </div>
 
-        <!-- LOGS VIEWER -->
-        <div class="logs-section">
+        <div id="stepSuccess" class="hidden">
+          <div class="success-box">
+            <div class="success-icon">✅</div>
+            <div style="flex:1;">
+              <h2 style="margin:0; font-size:16px;">Successfully Uploaded!</h2>
+              <div class="flex gap-2 mt-2">
+                <input type="text" id="shareLink" readonly style="flex:1; padding:6px; font-size:12px;">
+                <button id="btnCopy" class="btn secondary" style="padding:6px 12px; font-size:12px;">Copy Link</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- POSISI TENGAH: VIDEO REPLAY -->
+      <div class="video-section">
+        <video id="videoPreview" controls autoplay></video>
+      </div>
+
+      <!-- POSISI BAWAH: TAB SYSTEM -->
+      <div class="logs-section">
+        <div class="logs-header-main">
           <div class="tabs">
             <div class="tab active" data-target="tabInfo">Info</div>
             <div class="tab" data-target="tabConsole">Console</div>
@@ -24,6 +54,13 @@
             <div class="tab" data-target="tabActions">Actions</div>
             <div class="tab" data-target="tabBackend">Backend</div>
           </div>
+          
+          <div class="action-buttons">
+            <button id="btnSave" class="btn primary">Save & Generate Report</button>
+            <div id="loading" class="hidden" style="font-size:12px; color:#f29900; margin-top:4px;">Uploading...</div>
+            <div id="errorMsg" class="hidden error"></div>
+          </div>
+        </div>
           
           <div class="panels">
             <!-- INFO TAB -->
@@ -130,69 +167,64 @@
             
             <!-- NETWORK TAB -->
             <div id="tabNetwork" class="panel">
-              <div class="log-toolbar">
-                <div class="filter-box">
-                  <span class="icon-search">🔍</span>
-                  <input type="text" id="networkFilterInput" placeholder="Filter">
-                </div>
-                <label class="error-only-check"><input type="checkbox" id="networkErrorsOnly"> Errors only</label>
-              </div>
-            <div id="networkPills" class="flex gap-2 mb-4">
-              <button class="pill active pill-dark" data-filter="all">All</button>
-              <button class="pill" data-filter="xhr">Fetch/XHR</button>
-              <button class="pill" data-filter="ws">WS</button>
-              <button class="pill" data-filter="script">JS</button>
-              <button class="pill" data-filter="stylesheet">CSS</button>
-              <button class="pill" data-filter="img">Media</button>
-              <button class="pill" data-filter="font">Font</button>
-              <button class="pill" data-filter="doc">Doc</button>
-              <button class="pill" data-filter="other">Other</button>
-            </div>
+              <div class="network-tab-layout">
+                <div class="network-main-view">
+                  <div class="log-toolbar">
+                    <div class="filter-box">
+                      <span class="icon-search">🔍</span>
+                      <input type="text" id="networkFilterInput" placeholder="Filter">
+                    </div>
+                    <label class="error-only-check"><input type="checkbox" id="networkErrorsOnly"> Errors only</label>
+                  </div>
+                  <div id="networkPills" class="network-pills">
+                    <button class="pill active pill-dark" data-filter="all">All</button>
+                    <button class="pill" data-filter="xhr">Fetch/XHR</button>
+                    <button class="pill" data-filter="ws">WS</button>
+                    <button class="pill" data-filter="script">JS</button>
+                    <button class="pill" data-filter="stylesheet">CSS</button>
+                    <button class="pill" data-filter="img">Media</button>
+                    <button class="pill" data-filter="font">Font</button>
+                    <button class="pill" data-filter="doc">Doc</button>
+                    <button class="pill" data-filter="other">Other</button>
+                  </div>
 
-            <div class="table-container">
-              <table class="net-table">
-                <thead>
-                  <tr>
-                    <th style="width: 40px;">#</th>
-                    <th>Name</th>
-                    <th>Method</th>
-                    <th>Status</th>
-                    <th>Domain</th>
-                    <th>Type</th>
-                    <th>Tab</th>
-                    <th>Frame</th>
-                    <th>Size</th>
-                    <th>Time</th>
-                    <th>Waterfall</th>
-                  </tr>
-                </thead>
-                <tbody id="networkLogs">
-                  <!-- Network logs will be injected here -->
-                </tbody>
-              </table>
-              
-              <div id="networkDetailsPanel" class="details-panel">
-                <div class="details-header">
-                  <button id="closeDetails" class="close-btn">&times;</button>
-                  <div class="d-tabs">
-                    <div class="d-tab active" data-dtool="headers">Headers</div>
-                    <div class="d-tab" data-dtool="payload">Request</div>
-                    <div class="d-tab" data-dtool="response">Response</div>
-                  </div>
-                  <div class="flex gap-2 ml-auto">
-                      <button class="pill-sm">Copy</button>
-                      <button class="pill-sm">cURL</button>
+                  <div class="network-table-container">
+                    <table class="bl-network-table">
+                      <thead>
+                        <tr>
+                          <th class="col-idx">#</th>
+                          <th>Name</th>
+                          <th class="col-method">Method</th>
+                          <th class="col-status">Status</th>
+                          <th>Domain</th>
+                          <th class="col-type">Type</th>
+                          <th>Context</th>
+                          <th class="col-size">Size</th>
+                          <th class="col-time">Time</th>
+                          <th class="col-waterfall">Waterfall</th>
+                        </tr>
+                      </thead>
+                      <tbody id="networkLogs">
+                        <!-- Network logs will be injected here -->
+                      </tbody>
+                    </table>
                   </div>
                 </div>
-                <div class="details-body">
-                  <div id="detailsHeaders" class="d-list active">
-                      <!-- General, Response Headers, Request Headers injected here -->
+
+                <!-- CONTEXTUAL SIDE PANEL -->
+                <div id="networkDetailsPanel" class="network-side-panel">
+                  <div class="details-header">
+                    <button id="closeDetails" class="close-panel-btn">&times;</button>
+                    <div class="d-tabs">
+                      <div class="d-tab active" data-dtool="headers">Headers</div>
+                      <div class="d-tab" data-dtool="payload">Request</div>
+                      <div class="d-tab" data-dtool="response">Response</div>
+                    </div>
                   </div>
-                  <div id="detailsPayload" class="d-panel">
-                      <!-- Payload goes here -->
-                  </div>
-                  <div id="detailsResponse" class="d-panel">
-                      <!-- Response goes here -->
+                  <div class="details-body">
+                    <div id="detailsHeaders" class="d-list active"></div>
+                    <div id="detailsPayload" class="d-panel"></div>
+                    <div id="detailsResponse" class="d-panel"></div>
                   </div>
                 </div>
               </div>
@@ -215,41 +247,7 @@
           </div>
         </div>
 
-      </div>
 
-      <div class="right-panel">
-        <div id="stepForm">
-          <div class="form-group">
-            <label>Bug Title</label>
-            <input type="text" id="inputTitle" placeholder="e.g. Broken Login Button on Mobile">
-          </div>
-          <div class="form-group">
-            <label>Description</label>
-            <textarea id="inputDesc" rows="6" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea>
-          </div>
-          <button id="btnSave" class="btn primary">Save to Google Drive</button>
-          <div id="loading" class="hidden">Uploading carefully... please wait!</div>
-          <div id="errorMsg" class="hidden error"></div>
-        </div>
-
-        <div id="stepSuccess" class="hidden">
-          <div class="success-icon">✅</div>
-          <h2>Successfully Uploaded!</h2>
-          <div class="form-group">
-            <label>Share Link (Google Drive)</label>
-            <input type="text" id="shareLink" readonly>
-            <button id="btnCopy" class="btn secondary mt-2">Copy Link</button>
-          </div>
-
-          <!-- MONDAY.COM MOCK REPORT SECTION -->
-          <div class="monday-box">
-            <h3>Report to Monday.com</h3>
-            <p><small>(Feature pending backend implementation)</small></p>
-            <input type="text" id="mondayBoardId" placeholder="Monday Board ID">
-            <button class="btn primary" disabled>Send Report</button>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 

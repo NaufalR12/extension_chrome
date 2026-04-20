@@ -306,9 +306,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function renderNetwork() {
       const netArr = sessionLogs.network || [];
+      
+      // Calculate total session time for Waterfall scaling
+      let maxRelativeMs = 1000; // default min 1s
+      netArr.forEach(n => {
+        const end = (n.relativeMs || 0) + (n.duration || 0);
+        if (end > maxRelativeMs) maxRelativeMs = end;
+      });
+      // Also check other log types for end time
+      sessionLogs.console.forEach(c => { if (c.relativeMs > maxRelativeMs) maxRelativeMs = c.relativeMs; });
+      sessionLogs.actions.forEach(a => { if (a.relativeMs > maxRelativeMs) maxRelativeMs = a.relativeMs; });
+
       const filtered = netArr.filter(n => {
         if (nErrorsOnly) {
-          const isErr = (n.status === 'CACHE_MISS' || (n.status && n.status >= 400));
+          const isErr = (n.status && n.status >= 400) || n.status === 0;
           if (!isErr) return false;
         }
         if (nTypeFilter !== 'all') {
@@ -323,27 +334,52 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       const nHtml = filtered.map((n, i) => {
-        const match = (n.time || '').match(/\[(\d+:\d+)\]/);
-        const isErr = (n.status === 'CACHE_MISS' || (n.status && n.status >= 400));
-        const name = n.url.split('/').pop() || n.url;
-        let domain = '';
-        try { domain = new URL(n.url).hostname; } catch(e){}
+        const isErr = (n.status && n.status >= 400) || n.status === 0;
+        const statusClass = n.status >= 400 ? 'status-error' : (n.status >= 300 ? 'status-redirect' : 'status-success');
         
-        return `<tr class="${isErr?'error-row':''} ${selectedReq === n ? 'selected' : ''} log-jump-target" data-idx="${netArr.indexOf(n)}" data-time-ms="${n.relativeMs || (parseSec(n.time) * 1000)}">
-          <td>${i+1}</td>
-          <td><div title="${n.url}"><span class="log-jump-btn" style="margin-right:4px;">⏯️</span> ${name}</div></td>
-          <td>${n.method}</td>
-          <td>${isErr ? (n.status === 'CACHE_MISS' ? 'CACHE_MISS' : n.status) : (n.status || '200')}</td>
-          <td>${domain}</td>
-          <td>${n.type||'xhr'}</td>
-          <td>-</td>
-          <td>0</td>
-          <td>${n.size ? formatSize(n.size) : (n.isStatic ? '(Cached)' : '')}</td>
-          <td>${n.duration ? n.duration + ' ms' : ''}</td>
-          <td><div class="waterfall-bar" style="width: ${Math.min(n.duration/10, 50)}px"></div></td>
+        const urlObj = new URL(n.url);
+        const name = urlObj.pathname.split('/').pop() || urlObj.pathname || '/';
+        const domain = urlObj.hostname;
+        
+        // Waterfall logic
+        const startPct = ((n.relativeMs || 0) / maxRelativeMs) * 100;
+        const widthPct = Math.max(0.5, ((n.duration || 0) / maxRelativeMs) * 100);
+        
+        // Preflight Detection (Jika ada OPTIONS untuk URL yang sama di waktu berdekatan)
+        const hasPreflight = netArr.some(prev => 
+          prev.method === 'OPTIONS' && 
+          prev.url === n.url && 
+          Math.abs(prev.relativeMs - n.relativeMs) < 1000
+        );
+
+        return `<tr class="${selectedReq === n ? 'selected' : ''} log-jump-target" data-idx="${netArr.indexOf(n)}" data-time-ms="${n.relativeMs || 0}">
+          <td class="col-idx">${i+1}</td>
+          <td>
+            <div class="col-name-container" title="${n.url}">
+              <span class="log-jump-btn">⏯️</span>
+              <span style="font-weight:500;">${name}</span>
+            </div>
+          </td>
+          <td class="col-method">
+            ${n.method}${hasPreflight ? ' <small style="color:#888;font-weight:normal;">+Preflight</small>' : ''}
+          </td>
+          <td class="col-status ${statusClass}">
+            ${n.status || 'Error'}
+          </td>
+          <td class="col-domain" title="${domain}">${domain}</td>
+          <td class="col-type">${n.type || 'xhr'}</td>
+          <td style="font-size:11px; color:#666;">${n.frameContext || 'Main Frame'}</td>
+          <td class="col-size">${n.fromCache ? '(Cached)' : formatSize(n.size)}</td>
+          <td class="col-time">${n.duration ? n.duration + 'ms' : '-'}</td>
+          <td class="col-waterfall">
+            <div class="wf-bg">
+              <div class="wf-bar ${isErr?'error':(n.fromCache?'cached':'')}" style="left:${startPct}%; width:${widthPct}%;"></div>
+            </div>
+          </td>
         </tr>`;
       }).join('');
-      document.getElementById('networkLogs').innerHTML = nHtml || '<tr><td colspan="11" style="text-align:center">No network logs</td></tr>';
+
+      document.getElementById('networkLogs').innerHTML = nHtml || '<tr><td colspan="10" style="text-align:center; padding:40px; color:#999;">No network logs found matching filters.</td></tr>';
 
       // Attach row clicks
       document.querySelectorAll('#networkLogs tr').forEach(row => {
@@ -365,12 +401,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function showDetails(req) {
       if (!req) return;
-      panel.classList.add('open');
+      const networkTab = document.getElementById('tabNetwork');
+      networkTab.classList.add('detail-open');
       renderDetailTab('headers', req);
     }
 
-    closeBtn.addEventListener('click', () => {
-      panel.classList.remove('open');
+    closeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const networkTab = document.getElementById('tabNetwork');
+      networkTab.classList.remove('detail-open');
       selectedReq = null;
       renderNetwork();
     });

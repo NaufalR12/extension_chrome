@@ -3,6 +3,7 @@ let recordingStartTime = null;
 let isPaused = false;
 let cachedCountry = "Unknown";
 let headerCache = new Map(); // Store headers by URL during recording
+let pendingRequests = new Map(); // requestId -> data (for advanced tracking)
 
 // Detect country on startup
 async function updateCountryCache() {
@@ -44,14 +45,46 @@ function flattenHeaders(headersArray) {
   return obj;
 }
 
-// webRequest Listeners
+// 🛠️ Helper: Determine Category (Fetch, JS, CSS, etc.)
+function determineResourceType(url, initiator, type) {
+  if (type === 'xmlhttprequest' || type === 'fetch') return 'Fetch/XHR';
+  if (type === 'script') return 'JS';
+  if (type === 'stylesheet') return 'CSS';
+  if (type === 'image') return 'Img';
+  if (type === 'font') return 'Font';
+  if (type === 'media') return 'Media';
+  if (type === 'main_frame' || type === 'sub_frame') return 'Doc';
+  return type.charAt(0).toUpperCase() + type.slice(1);
+}
+
+// webRequest Listeners (Advanced Tracker)
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (!isRecording) return;
+    pendingRequests.set(details.requestId, {
+      id: details.requestId,
+      url: details.url,
+      method: details.method,
+      type: details.type,
+      startTime: Date.now(),
+      tabId: details.tabId,
+      frameId: details.frameId,
+      initiator: details.initiator
+    });
+  },
+  { urls: ["<all_urls>"] }
+);
+
 chrome.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
     if (!isRecording) return;
-    const url = details.url;
-    if (!headerCache.has(url)) headerCache.set(url, { request: {}, response: {} });
-    const entry = headerCache.get(url);
-    entry.request = maskHeaders(flattenHeaders(details.requestHeaders));
+    const req = pendingRequests.get(details.requestId);
+    if (!req) return;
+    req.requestHeaders = maskHeaders(flattenHeaders(details.requestHeaders));
+    
+    // Legacy headerCache for backward compat/other tabs
+    if (!headerCache.has(details.url)) headerCache.set(details.url, { request: {}, response: {} });
+    headerCache.get(details.url).request = req.requestHeaders;
   },
   { urls: ["<all_urls>"] },
   ["requestHeaders", "extraHeaders"]
@@ -60,25 +93,100 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
 chrome.webRequest.onResponseStarted.addListener(
   (details) => {
     if (!isRecording) return;
-    const url = details.url;
-    if (!headerCache.has(url)) headerCache.set(url, { request: {}, response: {} });
-    const entry = headerCache.get(url);
-    entry.response = maskHeaders(flattenHeaders(details.responseHeaders));
-    entry.status = details.statusCode;
+    const req = pendingRequests.get(details.requestId);
+    if (!req) return;
+    
+    req.status = details.statusCode;
+    req.responseHeaders = maskHeaders(flattenHeaders(details.responseHeaders));
+    req.fromCache = details.fromCache;
+    req.ip = details.ip;
 
-    // Ekstrak Trace IDs dari response headers
+    // Extract size from Content-Length
+    const cl = details.responseHeaders.find(h => h.name.toLowerCase() === 'content-length');
+    if (cl) req.size = parseInt(cl.value);
+
+    // Legacy trace IDs
     const traceHeaderNames = ['x-trace-id', 'x-request-id', 'traceparent', 'x-amzn-trace-id', 'cf-ray', 'x-b3-traceid'];
     const rawHeaders = flattenHeaders(details.responseHeaders);
-    const traceIds = {};
-    traceHeaderNames.forEach(h => {
-      if (rawHeaders[h]) traceIds[h] = rawHeaders[h];
-    });
-    if (Object.keys(traceIds).length > 0) {
-      entry.traceIds = traceIds;
+    req.traceIds = {};
+    traceHeaderNames.forEach(h => { if (rawHeaders[h]) req.traceIds[h] = rawHeaders[h]; });
+
+    // Update Legacy HeaderCache
+    if (headerCache.has(details.url)) {
+      const entry = headerCache.get(details.url);
+      entry.response = req.responseHeaders;
+      entry.status = req.status;
+      if (Object.keys(req.traceIds).length > 0) entry.traceIds = req.traceIds;
     }
   },
   { urls: ["<all_urls>"] },
   ["responseHeaders", "extraHeaders"]
+);
+
+chrome.webRequest.onCompleted.addListener(
+  (details) => {
+    if (!isRecording) {
+      pendingRequests.delete(details.requestId);
+      return;
+    }
+    const req = pendingRequests.get(details.requestId);
+    if (!req) return;
+
+    const endTime = Date.now();
+    const duration = endTime - req.startTime;
+    
+    // Final check for size in onCompleted (some servers send it late)
+    if (!req.size || req.size === 0) {
+      const cl = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-length');
+      if (cl) req.size = parseInt(cl.value);
+    }
+
+    const logEntry = {
+      method: req.method,
+      url: req.url,
+      status: req.status || details.statusCode || 200,
+      type: determineResourceType(req.url, req.initiator, req.type),
+      size: req.fromCache ? -1 : (req.size || 0),
+      duration: duration,
+      requestHeaders: req.requestHeaders,
+      responseHeaders: req.responseHeaders,
+      traceIds: req.traceIds,
+      isStatic: !['xmlhttprequest', 'fetch'].includes(req.type),
+      fromCache: req.fromCache,
+      frameContext: req.frameId === 0 ? "Main Frame" : `Sub Frame (${req.frameId})`,
+      startTimeAbs: req.startTime
+    };
+
+    appendLog('NETWORK', logEntry);
+
+    // 🧹 Memory Cleanup
+    pendingRequests.delete(details.requestId);
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders", "extraHeaders"]
+);
+
+chrome.webRequest.onErrorOccurred.addListener(
+  (details) => {
+    if (!isRecording) {
+      pendingRequests.delete(details.requestId);
+      return;
+    }
+    const req = pendingRequests.get(details.requestId);
+    if (req) {
+      appendLog('NETWORK', {
+        method: req.method,
+        url: req.url,
+        status: 0,
+        type: determineResourceType(req.url, req.initiator, req.type),
+        message: details.error,
+        startTimeAbs: req.startTime,
+        duration: Date.now() - req.startTime
+      });
+    }
+    pendingRequests.delete(details.requestId);
+  },
+  { urls: ["<all_urls>"] }
 );
 
 // Initialize log storage
@@ -110,36 +218,39 @@ async function appendLog(type, payload) {
   // Inject relative video timer
   if (recordingStartTime) {
     const now = Date.now();
-    const elapsedMs = now - recordingStartTime;
-    payload.relativeMs = elapsedMs; // Raw ms for machine seeking
+    const elapsedMs = payload.startTimeAbs ? (payload.startTimeAbs - recordingStartTime) : (now - recordingStartTime);
+    payload.relativeMs = elapsedMs;
 
     const elapsedSecs = Math.floor(elapsedMs / 1000);
     const m = Math.floor(elapsedSecs / 60).toString().padStart(2, '0');
     const s = (elapsedSecs % 60).toString().padStart(2, '0');
-    payload.time = `[${m}:${s}] ` + (payload.time || "");
+    payload.time = `[${m}:${s}] `;
   }
   
   if (type === 'CONSOLE') logs.console.push(payload);
   else if (type === 'ACTIONS') logs.actions.push(payload);
   else if (type === 'BACKEND') logs.backend.push(payload);
   else if (type === 'NETWORK') {
-    // Enrich static assets with headers from cache
-    if (payload.isStatic && !payload.requestHeaders) {
-      const cached = headerCache.get(payload.url);
-      if (cached) {
-        payload.requestHeaders = cached.request;
-        payload.responseHeaders = cached.response;
-        if (!payload.status) payload.status = cached.status;
+    // 🧠 SMART MERGING: Jika log ini dari monkey-patch (punya requestBody/responseBody),
+    // coba cari entry webRequest yang sudah ada dan gabungkan.
+    if (payload.isMonkeyPatched) {
+      const existing = logs.network.find(n => 
+        n.url === payload.url && 
+        Math.abs(n.relativeMs - payload.relativeMs) < 2000 // Window 2 detik
+      );
+      if (existing) {
+        existing.requestBody = payload.requestBody;
+        existing.responseBody = payload.responseBody;
+        if (payload.requestHeaders) existing.requestHeaders = {...existing.requestHeaders, ...payload.requestHeaders};
+        // Jangan push log baru, kita sudah merge
+        await chrome.storage.local.set({ sessionLogs: logs });
+        return;
       }
     }
-    // Enrich dengan trace IDs dari cache
-    const cached = headerCache.get(payload.url);
-    if (cached && cached.traceIds) {
-      payload.traceIds = cached.traceIds;
-    }
+
     logs.network.push(payload);
     
-    // Jika status 4xx atau 5xx, tambahkan ke backend sebagai API Failure
+    // API Failure Logging
     const status = payload.status;
     if (status && typeof status === 'number' && status >= 400) {
       const traceInfo = payload.traceIds ? Object.entries(payload.traceIds).map(([k,v]) => `${k}: ${v}`).join(' | ') : '';
@@ -148,7 +259,8 @@ async function appendLog(type, payload) {
         type: 'API Failure',
         message: `${payload.method} ${payload.url} → ${status}`,
         stack: traceInfo ? `Trace IDs:\n${traceInfo}` : '',
-        source: payload.url
+        source: payload.url,
+        relativeMs: payload.relativeMs
       });
     }
   }
