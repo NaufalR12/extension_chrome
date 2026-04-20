@@ -12,53 +12,94 @@ window.addEventListener('message', (event) => {
     return;
   }
   
-  chrome.runtime.sendMessage({
-    action: 'LOG_CAPTURED',
-    type: event.data.type,
-    payload: event.data.payload
-  });
+  try {
+    chrome.runtime.sendMessage({
+      action: 'LOG_CAPTURED',
+      type: event.data.type,
+      payload: event.data.payload
+    });
+  } catch (e) {
+    if (e.message.includes('context invalidated')) {
+      console.warn('[Bug Reporter] Extension updated. Please refresh the page to continue log capture.');
+    }
+  }
 });
+
+// Key sequence tracking for inputs
+let keySequenceMap = new Map();
+document.addEventListener('keydown', (e) => {
+  const target = e.target;
+  if (!target || !['INPUT', 'TEXTAREA'].includes(target.tagName)) return;
+  
+  let seq = keySequenceMap.get(target) || '';
+  if (e.key === 'Backspace') seq += '⌫';
+  else if (e.key === 'Enter') seq += 'Enter';
+  else if (e.key.length === 1) seq += e.key;
+  
+  keySequenceMap.set(target, seq);
+}, true);
+
+function getElementAttributes(el) {
+  let attrs = `<${el.tagName.toLowerCase()}`;
+  for (let i = 0; i < el.attributes.length; i++) {
+    const attr = el.attributes[i];
+    attrs += ` ${attr.name}="${attr.value}"`;
+  }
+  return attrs + '>';
+}
 
 // Capture Actions (clicks and inputs)
 document.addEventListener('click', (e) => {
   const target = e.target;
-  let elementDesc = target.tagName.toLowerCase();
-  if (target.id) elementDesc += `#${target.id}`;
-  if (target.className && typeof target.className === 'string') {
-    elementDesc += `.${target.className.split(' ').join('.')}`;
-  }
-  if (target.innerText) {
-    let text = target.innerText.substring(0, 20).replace(/\n/g, ' ');
-    elementDesc += ` ("${text}")`;
-  }
+  if (!target) return;
   
-  chrome.runtime.sendMessage({
-    action: 'LOG_CAPTURED',
-    type: 'ACTIONS',
-    payload: {
-      time: new Date().toISOString(),
-      event: 'Click',
-      element: elementDesc
-    }
-  });
+  const elementDesc = getElementAttributes(target);
+  
+  try {
+    chrome.runtime.sendMessage({
+      action: 'LOG_CAPTURED',
+      type: 'ACTIONS',
+      payload: {
+        time: new Date().toISOString(),
+        event: 'Click',
+        element: elementDesc,
+        fullHtml: target.outerHTML.substring(0, 1000)
+      }
+    });
+  } catch(err) {}
 }, true);
 
 document.addEventListener('input', (e) => {
   const target = e.target;
   if (!target || !target.tagName) return;
-  let elementDesc = target.tagName.toLowerCase();
-  if (target.id) elementDesc += `#${target.id}`;
-  if (target.name) elementDesc += `[name=${target.name}]`;
+  
+  const elementDesc = getElementAttributes(target);
+  let value = keySequenceMap.get(target) || target.value || '';
+  
+  if (target.type === 'password') value = '***';
+  else if (value.length > 100) value = value.substring(0, 100) + '...';
 
-  chrome.runtime.sendMessage({
-    action: 'LOG_CAPTURED',
-    type: 'ACTIONS',
-    payload: {
-      time: new Date().toISOString(),
-      event: 'Input Text',
-      element: elementDesc
-    }
-  });
+  try {
+    chrome.runtime.sendMessage({
+      action: 'LOG_CAPTURED',
+      type: 'ACTIONS',
+      payload: {
+        time: new Date().toISOString(),
+        event: 'Typed',
+        element: elementDesc,
+        value: value
+      }
+    });
+  } catch(err) {}
+  
+  // Reset sequence after a while or on focus out? Jam usually debounces.
+  // For now let's keep it until blur.
+}, true);
+
+document.addEventListener('blur', (e) => {
+  if (keySequenceMap.has(e.target)) {
+    keySequenceMap.delete(e.target);
+  }
 }, true);
 
 // Respond to requests
@@ -93,7 +134,9 @@ function createWidget() {
   const style = document.createElement('style');
   style.textContent = `
     .widget {
-      display: flex;
+      display: flex !important;
+      visibility: visible !important;
+      opacity: 1 !important;
       align-items: center;
       background: #1e1e2e;
       color: white;
@@ -102,6 +145,11 @@ function createWidget() {
       font-family: sans-serif;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
       gap: 12px;
+      cursor: grab;
+      user-select: none;
+    }
+    .widget:active {
+      cursor: grabbing;
     }
     .btn {
       background: none;
@@ -118,7 +166,21 @@ function createWidget() {
     }
     .btn:hover { background: #3c3c50; }
     .btn.stop:hover { background: #ff4d4d; }
+    .btn.draw-active { background: #ffd700; color: #000; }
     .timer { font-variant-numeric: tabular-nums; font-weight: bold; width: 50px; text-align: center; }
+    .divider { width: 1px; height: 24px; background: #4e4e60; margin: 0 4px; }
+    
+    .color-picker { display: none; gap: 6px; margin: 0 4px; align-items: center; }
+    .color-picker.show { display: flex; }
+    .color-dot { width: 16px; height: 16px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: transform 0.1s;}
+    .color-dot:hover { transform: scale(1.1); }
+    .color-dot.active { border-color: white; box-shadow: 0 0 0 1px #000; }
+    .c-red { background: #ff0000; }
+    .c-blue { background: #0088ff; }
+    .c-green { background: #00d26a; }
+    .c-yellow { background: #ffea00; }
+    .clear { background: none; border: 1px solid rgba(255,255,255,0.3); color: white; border-radius: 4px; font-size: 11px; padding: 2px 6px; cursor: pointer;}
+    .clear:hover { background: rgba(255,255,255,0.1); }
   `;
 
   const widget = document.createElement('div');
@@ -138,6 +200,45 @@ function createWidget() {
   btnStop.title = 'Stop Record';
   btnStop.innerHTML = '⏹️';
 
+  const divider = document.createElement('div');
+  divider.className = 'divider';
+
+  const btnDraw = document.createElement('button');
+  btnDraw.className = 'btn';
+  btnDraw.title = 'Toggle Draw Mode';
+  btnDraw.innerHTML = '✏️';
+
+  const colorPickerWrapper = document.createElement('div');
+  colorPickerWrapper.className = 'color-picker';
+  
+  const colors = [
+    { class: 'c-red', value: '#ff0000' },
+    { class: 'c-blue', value: '#0088ff' },
+    { class: 'c-green', value: '#00d26a' },
+    { class: 'c-yellow', value: '#ffea00' }
+  ];
+
+  colors.forEach((c, i) => {
+    const dot = document.createElement('div');
+    dot.className = `color-dot ${c.class} ${i === 0 ? 'active' : ''}`;
+    dot.onclick = () => {
+      currentColor = c.value;
+      colorPickerWrapper.querySelectorAll('.color-dot').forEach(el => el.classList.remove('active'));
+      dot.classList.add('active');
+    };
+    colorPickerWrapper.appendChild(dot);
+  });
+
+  const btnClear = document.createElement('button');
+  btnClear.className = 'clear';
+  btnClear.innerText = 'Clear';
+  btnClear.onclick = () => {
+    if (drawCtx && drawCanvas) {
+      drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+    }
+  };
+  colorPickerWrapper.appendChild(btnClear);
+
   let isPaused = false;
   
   btnPause.addEventListener('click', () => {
@@ -150,14 +251,62 @@ function createWidget() {
     chrome.runtime.sendMessage({ action: 'STOP_RECORDING' });
   });
 
+  btnDraw.addEventListener('click', () => {
+    isDrawingMode = !isDrawingMode;
+    if (isDrawingMode) {
+      btnDraw.classList.add('draw-active');
+      colorPickerWrapper.classList.add('show');
+      if (drawCanvas) drawCanvas.style.pointerEvents = 'auto'; // Enable draw focus
+    } else {
+      btnDraw.classList.remove('draw-active');
+      colorPickerWrapper.classList.remove('show');
+      if (drawCanvas) drawCanvas.style.pointerEvents = 'none'; // Revert to click-through
+    }
+  });
+
   widget.appendChild(timer);
   widget.appendChild(btnPause);
   widget.appendChild(btnStop);
+  widget.appendChild(divider);
+  widget.appendChild(btnDraw);
+  widget.appendChild(colorPickerWrapper);
   
   shadow.appendChild(style);
   shadow.appendChild(widget);
   
   document.documentElement.appendChild(widgetContainer);
+
+  // Dragging logic
+  let isDragging = false;
+  let offsetX = 0;
+  let offsetY = 0;
+
+  widget.addEventListener('mousedown', (e) => {
+    // Hindari drag jika yang diklik adalah tombol/warna
+    if (e.target.tagName.toLowerCase() === 'button' || e.target.closest('.btn') || e.target.classList.contains('color-dot')) return;
+    
+    isDragging = true;
+    const rect = widgetContainer.getBoundingClientRect();
+    offsetX = e.clientX - rect.left;
+    offsetY = e.clientY - rect.top;
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    
+    // Matikan bottom/right lock bawaan css karena kita sekarang memanipulasi .top dan .left
+    widgetContainer.style.bottom = 'auto';
+    widgetContainer.style.right = 'auto';
+    
+    const x = e.clientX - offsetX;
+    const y = e.clientY - offsetY;
+    widgetContainer.style.left = x + 'px';
+    widgetContainer.style.top = y + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    isDragging = false;
+  });
 
   secondsRecord = 0;
   timerInterval = setInterval(() => {
@@ -168,6 +317,71 @@ function createWidget() {
       timer.innerText = `${m}:${s}`;
     }
   }, 1000);
+
+  // Initialize Canvas
+  setupCanvas();
+}
+
+let isDrawingMode = false;
+let drawCanvas = null;
+let drawCtx = null;
+let currentColor = '#ff0000';
+let isDrawing = false;
+let resizeListener = null;
+
+function setupCanvas() {
+  if (drawCanvas) return;
+  drawCanvas = document.createElement('canvas');
+  drawCanvas.id = 'bug-reporter-drawing-canvas';
+  drawCanvas.style.position = 'fixed';
+  drawCanvas.style.top = '0';
+  drawCanvas.style.left = '0';
+  drawCanvas.style.zIndex = '2147483646'; // Just under the widget shadow root
+  drawCanvas.style.pointerEvents = 'none';
+  
+  const resizeContent = () => {
+    // Save image
+    const tempCanvas = document.createElement('canvas');
+    if (drawCanvas.width > 0 && drawCanvas.height > 0) {
+       tempCanvas.width = drawCanvas.width;
+       tempCanvas.height = drawCanvas.height;
+       tempCanvas.getContext('2d').drawImage(drawCanvas, 0, 0);
+    }
+    
+    drawCanvas.width = window.innerWidth;
+    drawCanvas.height = window.innerHeight;
+    
+    // Restore image
+    drawCtx = drawCanvas.getContext('2d');
+    if (tempCanvas.width > 0) {
+      drawCtx.drawImage(tempCanvas, 0, 0);
+    }
+  };
+  
+  resizeContent();
+  resizeListener = resizeContent;
+  window.addEventListener('resize', resizeContent);
+
+  drawCanvas.addEventListener('mousedown', (e) => {
+    isDrawing = true;
+    drawCtx.beginPath();
+    drawCtx.moveTo(e.clientX, e.clientY);
+  });
+  
+  drawCanvas.addEventListener('mousemove', (e) => {
+    if (!isDrawing) return;
+    drawCtx.lineTo(e.clientX, e.clientY);
+    drawCtx.strokeStyle = currentColor;
+    drawCtx.lineWidth = 4;
+    drawCtx.lineCap = 'round';
+    drawCtx.lineJoin = 'round';
+    drawCtx.stroke();
+  });
+
+  drawCanvas.addEventListener('mouseup', () => isDrawing = false);
+  drawCanvas.addEventListener('mouseout', () => isDrawing = false);
+
+  (document.body || document.documentElement).appendChild(drawCanvas);
 }
 
 function removeWidget() {
@@ -178,5 +392,14 @@ function removeWidget() {
   if (timerInterval) {
     clearInterval(timerInterval);
     timerInterval = null;
+  }
+  if (drawCanvas) {
+    drawCanvas.remove();
+    drawCanvas = null;
+    isDrawingMode = false;
+  }
+  if (resizeListener) {
+    window.removeEventListener('resize', resizeListener);
+    resizeListener = null;
   }
 }

@@ -1,5 +1,57 @@
 let isRecording = false;
 let recordingStartTime = null;
+let headerCache = new Map(); // Store headers by URL during recording
+
+// Mask sensitive headers
+function maskHeaders(headers) {
+  if (!headers) return headers;
+  const sensitive = ['authorization', 'cookie', 'set-cookie', 'x-api-key', 'api-key'];
+  const masked = {};
+  for (let key in headers) {
+    if (sensitive.includes(key.toLowerCase())) {
+      masked[key] = '***** Auto-filtered';
+    } else {
+      masked[key] = headers[key];
+    }
+  }
+  return masked;
+}
+
+// Convert webRequest format to simple object
+function flattenHeaders(headersArray) {
+  const obj = {};
+  if (!headersArray) return obj;
+  headersArray.forEach(h => {
+    obj[h.name] = h.value;
+  });
+  return obj;
+}
+
+// webRequest Listeners
+chrome.webRequest.onBeforeSendHeaders.addListener(
+  (details) => {
+    if (!isRecording) return;
+    const url = details.url;
+    if (!headerCache.has(url)) headerCache.set(url, { request: {}, response: {} });
+    const entry = headerCache.get(url);
+    entry.request = maskHeaders(flattenHeaders(details.requestHeaders));
+  },
+  { urls: ["<all_urls>"] },
+  ["requestHeaders", "extraHeaders"]
+);
+
+chrome.webRequest.onResponseStarted.addListener(
+  (details) => {
+    if (!isRecording) return;
+    const url = details.url;
+    if (!headerCache.has(url)) headerCache.set(url, { request: {}, response: {} });
+    const entry = headerCache.get(url);
+    entry.response = maskHeaders(flattenHeaders(details.responseHeaders));
+    entry.status = details.statusCode;
+  },
+  { urls: ["<all_urls>"] },
+  ["responseHeaders", "extraHeaders"]
+);
 
 // Initialize log storage
 async function resetLogs() {
@@ -36,9 +88,20 @@ async function appendLog(type, payload) {
   }
   
   if (type === 'CONSOLE') logs.console.push(payload);
-  else if (type === 'NETWORK') logs.network.push(payload);
   else if (type === 'ACTIONS') logs.actions.push(payload);
   else if (type === 'BACKEND') logs.backend.push(payload);
+  else if (type === 'NETWORK') {
+    // Enrich static assets with headers from cache
+    if (payload.isStatic && !payload.requestHeaders) {
+      const cached = headerCache.get(payload.url);
+      if (cached) {
+        payload.requestHeaders = cached.request;
+        payload.responseHeaders = cached.response;
+        if (!payload.status) payload.status = cached.status;
+      }
+    }
+    logs.network.push(payload);
+  }
   
   // Keep size manageable
   if (logs.console.length > 500) logs.console.shift();
@@ -65,18 +128,27 @@ async function setupOffscreenDocument(path) {
   });
 }
 
-// Listen to messages
+// Global accessor for review page to fetch
+let pendingVideoBase64 = null;
+
+// Unified message listener
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // 1. Session Logging
   if (request.action === 'LOG_CAPTURED') {
     if (isRecording) {
       appendLog(request.type, request.payload);
     }
-  } else if (request.action === 'START_RECORDING') {
+  } 
+  
+  // 2. Recording Controls
+  else if (request.action === 'START_RECORDING') {
     resetLogs().then(() => {
-      // Initialize info object
       chrome.storage.local.get(['sessionLogs'], (data) => {
         const logs = data.sessionLogs || {};
-        logs.info = { url: request.payloadUrl || 'N/A' };
+        logs.info = { 
+          url: request.payloadUrl || 'N/A',
+          urlTimeline: [{ time: 0, url: request.payloadUrl || 'N/A' }]
+        };
         chrome.storage.local.set({ sessionLogs: logs });
       });
       
@@ -85,19 +157,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           if (response && response.status === 'started') {
             isRecording = true;
             recordingStartTime = Date.now();
+            headerCache.clear();
             
-            // Show widget on active tab (with fallback dynamic injection)
-            chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-              if (tabs[0]) {
-                chrome.tabs.sendMessage(tabs[0].id, { action: 'SHOW_WIDGET' }).catch(() => {
-                  // If it fails (due to extension reload without page refresh), force inject content script
+            // Show widget on the active tab of the last focused window
+            chrome.tabs.query({active: true, lastFocusedWindow: true}, function(tabs) {
+              const targetTab = tabs[0];
+              if (targetTab) {
+                chrome.tabs.sendMessage(targetTab.id, { action: 'SHOW_WIDGET' }).catch(() => {
                   chrome.scripting.executeScript({
-                    target: { tabId: tabs[0].id },
+                    target: { tabId: targetTab.id },
                     files: ['content.js']
                   }, () => {
                     if (!chrome.runtime.lastError) {
-                      // Try sending again after injection
-                      chrome.tabs.sendMessage(tabs[0].id, { action: 'SHOW_WIDGET' }).catch(() => {});
+                      chrome.tabs.sendMessage(targetTab.id, { action: 'SHOW_WIDGET' }).catch(() => {});
                     }
                   });
                 });
@@ -111,80 +183,71 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
     });
     return true; // async
-  } else if (request.action === 'STOP_RECORDING') {
+  } 
+  
+  else if (request.action === 'STOP_RECORDING') {
     isRecording = false;
     recordingStartTime = null;
+    headerCache.clear();
     chrome.runtime.sendMessage({ target: 'offscreen', action: 'stopRecording' });
-    // Hide widget on active tab
-    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-      if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { action: 'HIDE_WIDGET' });
+    chrome.tabs.query({active: true, lastFocusedWindow: true}, function(tabs) {
+      if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { action: 'HIDE_WIDGET' }).catch(() => {});
     });
     sendResponse({ status: 'stopped' });
-    return true; // async
-  } else if (request.action === 'PAUSE_RECORDING') {
+    return true;
+  }
+  
+  else if (request.action === 'PAUSE_RECORDING') {
     chrome.runtime.sendMessage({ target: 'offscreen', action: 'pauseRecording' });
-  } else if (request.action === 'RESUME_RECORDING') {
+  } 
+  
+  else if (request.action === 'RESUME_RECORDING') {
     chrome.runtime.sendMessage({ target: 'offscreen', action: 'resumeRecording' });
-  } else if (request.action === 'GET_RECORDING_STATE') {
+  } 
+  
+  else if (request.action === 'GET_RECORDING_STATE') {
     sendResponse({ isRecording });
-  } else if (request.action === 'recordingStopped') {
-    // Navigate to review page
-    handleUploadProcess(request.base64data);
+  } 
+  
+  else if (request.action === 'recordingStopped') {
+    pendingVideoBase64 = request.base64data;
+    chrome.tabs.create({ url: chrome.runtime.getURL('review.html') });
     chrome.offscreen.closeDocument();
+  }
+
+  // 3. Review & Upload
+  else if (request.action === 'GET_PENDING_VIDEO') {
+    sendResponse({ videoBase64: pendingVideoBase64 });
+  } 
+  
+  else if (request.action === 'COMMIT_UPLOAD') {
+    commitUpload(request.title, request.description, pendingVideoBase64, request.info)
+      .then(url => sendResponse({ success: true, url }))
+      .catch(err => sendResponse({ success: false, error: err.toString() }));
+    return true;
   }
 });
 
 // Track navigations while recording, and restore floating widget when page changes
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (isRecording && changeInfo.status === 'complete' && tab.url) {
-    // Prevent logging extension pages
     if (tab.url.startsWith('chrome-extension://')) return;
 
-    // Log the navigation
     appendLog('ACTIONS', {
       time: new Date().toLocaleTimeString(),
       event: '🧭 Navigated to',
       element: tab.url
     });
 
-    // Restore widget onto the newly loaded page
-    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-      if (tabs[0] && tabs[0].id === tabId) {
-         chrome.tabs.sendMessage(tabId, { action: 'SHOW_WIDGET' }).catch(() => {});
+    chrome.storage.local.get(['sessionLogs'], (data) => {
+      if (data.sessionLogs && data.sessionLogs.info && data.sessionLogs.info.urlTimeline) {
+        const elapsedSecs = recordingStartTime ? Math.floor((Date.now() - recordingStartTime) / 1000) : 0;
+        data.sessionLogs.info.urlTimeline.push({ time: elapsedSecs, url: tab.url });
+        chrome.storage.local.set({ sessionLogs: data.sessionLogs });
       }
     });
-  }
-});
 
-async function handleUploadProcess(videoBase64) {
-  try {
-    const data = await chrome.storage.local.get(['sessionLogs', 'mondayKey', 'mondayBoard']);
-    const logsData = data.sessionLogs || {};
-    
-    // Save to local storage for the review page
-    // Using chrome.storage.local might fail for large videos due to quota. 
-    // For MV3, we can open the page with a URL parameter and store data in background window memory or IndexedDB.
-    // For simplicity since background is persistent enough right before tab opens, we'll assign it to a global variable.
-    self.pendingVideoBase64 = videoBase64;
-    
-    // Open review page
-    chrome.tabs.create({ url: chrome.runtime.getURL('review.html') });
-
-  } catch (err) {
-    console.error("Upload error:", err);
-  }
-}
-
-// Global accessor for review page to fetch
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === 'GET_PENDING_VIDEO') {
-    sendResponse({ videoBase64: self.pendingVideoBase64 });
-  } else if (request.action === 'COMMIT_UPLOAD') {
-    // Trigger actual drive upload from review.html data
-    commitUpload(request.title, request.description, self.pendingVideoBase64, request.info)
-      .then(url => sendResponse({ success: true, url }))
-      .catch(err => sendResponse({ success: false, error: err.toString() }));
-    return true;
+    chrome.tabs.sendMessage(tabId, { action: 'SHOW_WIDGET' }).catch(() => {});
   }
 });
 
@@ -192,7 +255,11 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   const data = await chrome.storage.local.get(['sessionLogs']);
   const logsData = data.sessionLogs || {};
   
-  // Masukkan Info Data ke dalam session logs agar seragam
+  // Preserve urlTimeline if exists
+  if (logsData.info && logsData.info.urlTimeline) {
+    infoData.urlTimeline = logsData.info.urlTimeline;
+  }
+
   logsData.info = infoData || {
     browser: "Unknown",
     os: "Unknown",
@@ -221,8 +288,7 @@ async function commitUpload(title, desc, videoBase64, infoData) {
     logs: logsData
   }, null, 2)], {type: 'application/json'});
   
-  const videoData = Uint8Array.from(atob(videoBase64), c => c.charCodeAt(0));
-  const videoBlob = new Blob([videoData], {type: 'video/webm'});
+  const videoBlob = await (await fetch(`data:video/webm;base64,${videoBase64}`)).blob();
 
   const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
   const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, '_');

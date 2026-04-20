@@ -26,16 +26,134 @@
           </div>
           
           <div class="panels">
+            <!-- INFO TAB -->
             <div id="tabInfo" class="panel active">
-              <p><strong>OS:</strong> <span id="infoOS">-</span></p>
-              <p><strong>Browser:</strong> <span id="infoBrowser">-</span></p>
-              <p><strong>Resolution:</strong> <span id="infoRes">-</span></p>
-              <p class="url-text"><strong>URL:</strong> <span id="infoUrl">-</span></p>
+              <div class="info-grid">
+                <div class="meta-label">Timestamp</div>
+                <div class="meta-value" id="infoTimestamp">-</div>
+                
+                <div class="meta-label">Location</div>
+                <div class="meta-value" id="infoLocation">-</div>
+                
+                <div class="meta-label">OS</div>
+                <div class="meta-value">
+                  <span class="icon">🖥️</span> <span id="infoOS">-</span>
+                </div>
+                
+                <div class="meta-label">Browser</div>
+                <div class="meta-value">
+                  <span class="icon">🌐</span> <span id="infoBrowser">-</span>
+                </div>
+                
+                <div class="meta-label">Window size</div>
+                <div class="meta-value" id="infoRes">-</div>
+              </div>
+              
+              <div class="visited-urls-wrapper mt-3">
+                <div class="visited-urls-header">Visited URLs</div>
+                <div id="visitedUrlsList" class="visited-urls-list">
+                  <!-- URL list will be rendered here -->
+                </div>
+              </div>
             </div>
-            <div id="tabConsole" class="panel"><div id="consoleLogs" class="log-container"></div></div>
-            <div id="tabNetwork" class="panel"><div id="networkLogs" class="log-container"></div></div>
-            <div id="tabActions" class="panel"><div id="actionLogs" class="log-container"></div></div>
-            <div id="tabBackend" class="panel"><div id="backendLogs" class="log-container"></div></div>
+            
+            <!-- CONSOLE TAB -->
+            <div id="tabConsole" class="panel">
+              <div class="log-toolbar">
+                <div class="filter-box">
+                  <span class="icon-search">🔍</span>
+                  <input type="text" id="consoleFilterInput" placeholder="Filter">
+                </div>
+              </div>
+              <div class="log-toolbar-pills">
+                <button class="pill active" id="toggleNav"><span>•</span> Page navigations</button>
+                <button class="pill active" id="toggleNetErr"><span>⇄</span> Network errors</button>
+                <button class="pill active" id="toggleUsrAct"><span>🖱</span> User activity</button>
+              </div>
+              <div id="consoleLogs" class="log-container unified-log-list"></div>
+            </div>
+            
+            <!-- NETWORK TAB -->
+            <div id="tabNetwork" class="panel">
+              <div class="log-toolbar">
+                <div class="filter-box">
+                  <span class="icon-search">🔍</span>
+                  <input type="text" id="networkFilterInput" placeholder="Filter">
+                </div>
+                <label class="error-only-check"><input type="checkbox" id="networkErrorsOnly"> Errors only</label>
+              </div>
+            <div id="networkPills" class="flex gap-2 mb-4">
+              <button class="pill active pill-dark" data-filter="all">All</button>
+              <button class="pill" data-filter="xhr">Fetch/XHR</button>
+              <button class="pill" data-filter="ws">WS</button>
+              <button class="pill" data-filter="script">JS</button>
+              <button class="pill" data-filter="stylesheet">CSS</button>
+              <button class="pill" data-filter="img">Media</button>
+              <button class="pill" data-filter="font">Font</button>
+              <button class="pill" data-filter="doc">Doc</button>
+              <button class="pill" data-filter="other">Other</button>
+            </div>
+
+            <div class="table-container">
+              <table class="net-table">
+                <thead>
+                  <tr>
+                    <th style="width: 40px;">#</th>
+                    <th>Name</th>
+                    <th>Method</th>
+                    <th>Status</th>
+                    <th>Domain</th>
+                    <th>Type</th>
+                    <th>Tab</th>
+                    <th>Frame</th>
+                    <th>Size</th>
+                    <th>Time</th>
+                    <th>Waterfall</th>
+                  </tr>
+                </thead>
+                <tbody id="networkLogs">
+                  <!-- Network logs will be injected here -->
+                </tbody>
+              </table>
+              
+              <div id="networkDetailsPanel" class="details-panel">
+                <div class="details-header">
+                  <button id="closeDetails" class="close-btn">&times;</button>
+                  <div class="d-tabs">
+                    <div class="d-tab active" data-dtool="headers">Headers</div>
+                    <div class="d-tab" data-dtool="payload">Request</div>
+                    <div class="d-tab" data-dtool="response">Response</div>
+                  </div>
+                  <div class="flex gap-2 ml-auto">
+                      <button class="pill-sm">Copy</button>
+                      <button class="pill-sm">cURL</button>
+                  </div>
+                </div>
+                <div class="details-body">
+                  <div id="detailsHeaders" class="d-list active">
+                      <!-- General, Response Headers, Request Headers injected here -->
+                  </div>
+                  <div id="detailsPayload" class="d-panel">
+                      <!-- Payload goes here -->
+                  </div>
+                  <div id="detailsResponse" class="d-panel">
+                      <!-- Response goes here -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+            
+            <!-- ACTIONS TAB -->
+            <div id="tabActions" class="panel">
+               <div id="actionLogs" class="log-container unified-log-list"></div>
+            </div>
+            
+            <!-- BACKEND TAB -->
+            <div id="tabBackend" class="panel">
+              <div id="backendLogs" class="log-container"></div>
+            </div>
+            
           </div>
         </div>
 
