@@ -38,6 +38,23 @@ document.addEventListener('DOMContentLoaded', () => {
       return 0;
     }
 
+    // Helper to jump video time and highlight log
+    function jumpToVideoTime(timeMs, element) {
+      if (!videoPreview || timeMs === undefined || timeMs === null) return;
+      
+      // Precise jump (no buffer)
+      const targetSec = timeMs / 1000;
+      videoPreview.currentTime = targetSec;
+      
+      // Visual feedback: remove highlight from others, add to this one
+      document.querySelectorAll('.log-entry-active').forEach(el => el.classList.remove('log-entry-active'));
+      if (element) {
+        element.classList.add('log-entry-active');
+        // Smooth scroll to keep element in view if needed
+        element.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }
+
     // --- JSON TREE RENDERER ---
     // Fungsi rekursif yang menghasilkan HTML tree seperti DevTools
     let _jtCounter = 0; // unique ID per node untuk toggle tanpa framework
@@ -121,8 +138,11 @@ document.addEventListener('DOMContentLoaded', () => {
         ? `data-toggle="console" data-target="${uid}"`
         : '';
 
-      return `<div class="log-entry-expandable" data-time="${sec}">
+      const jumpIcon = `<span class="log-jump-btn" title="Jump to video time">⏯️</span>`;
+
+      return `<div class="log-entry-expandable log-jump-target" data-time="${sec}" data-time-ms="${item.relativeMs || (sec * 1000)}">
         <div class="log-entry-header" ${headerData}>
+          ${jumpIcon}
           ${chevronSection}
           <span class="log-level-badge ${level}">${level}</span>
           <span class="log-message-short">${msgShort.replace(/</g,'&lt;')}</span>
@@ -244,7 +264,12 @@ document.addEventListener('DOMContentLoaded', () => {
             content = `${item.event} ${item.element}`;
           }
         }
-        return `<div class="u-entry ${css}" data-time="${sec}"><div class="u-time">${t}</div><div class="u-icon">${icon}</div><div class="u-cont">${content}</div></div>`;
+        const jumpIcon = `<span class="log-jump-btn" style="margin-right:4px;">⏯️</span>`;
+        return `<div class="u-entry ${css} log-jump-target" data-time="${sec}" data-time-ms="${item.relativeMs || (sec * 1000)}">
+          <div class="u-time">${t} ${jumpIcon}</div>
+          <div class="u-icon">${icon}</div>
+          <div class="u-cont">${content}</div>
+        </div>`;
       }).join('');
       
       const startEntry = `<div class="u-entry nav"><div class="u-time">0:00</div><div class="u-icon">▶</div><div class="u-cont">Video started</div></div>`;
@@ -304,9 +329,9 @@ document.addEventListener('DOMContentLoaded', () => {
         let domain = '';
         try { domain = new URL(n.url).hostname; } catch(e){}
         
-        return `<tr class="${isErr?'error-row':''} ${selectedReq === n ? 'selected' : ''}" data-idx="${netArr.indexOf(n)}">
+        return `<tr class="${isErr?'error-row':''} ${selectedReq === n ? 'selected' : ''} log-jump-target" data-idx="${netArr.indexOf(n)}" data-time-ms="${n.relativeMs || (parseSec(n.time) * 1000)}">
           <td>${i+1}</td>
-          <td><div title="${n.url}">${name}</div></td>
+          <td><div title="${n.url}"><span class="log-jump-btn" style="margin-right:4px;">⏯️</span> ${name}</div></td>
           <td>${n.method}</td>
           <td>${isErr ? (n.status === 'CACHE_MISS' ? 'CACHE_MISS' : n.status) : (n.status || '200')}</td>
           <td>${domain}</td>
@@ -489,8 +514,8 @@ document.addEventListener('DOMContentLoaded', () => {
             content = `<strong>${a.event}</strong><br><small>${a.element}</small>`;
         }
 
-        return `<div class="u-entry ${css}" data-time="${sec}" style="cursor:pointer">
-          <div class="u-time">${t}</div>
+        return `<div class="u-entry ${css} log-jump-target" data-time="${sec}" data-time-ms="${a.relativeMs || (sec * 1000)}" style="cursor:pointer">
+          <div class="u-time">${t} <span class="log-jump-btn" style="display:block;margin-top:4px;">⏯️</span></div>
           <div class="u-icon">${icon}</div>
           <div class="u-cont">${content}</div>
         </div>`;
@@ -498,12 +523,15 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('actionLogs').innerHTML = aHtml || '<div class="u-entry" style="padding:20px; text-align:center; color:#999;">No actions recorded.</div>';
 
     // Click to seek in review
+    // Click to seek in review (Legacy handler merged into global delegator below)
+    /*
     document.querySelectorAll('#actionLogs .u-entry').forEach(el => {
       el.addEventListener('click', () => {
         const t = parseFloat(el.getAttribute('data-time'));
         videoPreview.currentTime = t;
       });
     });
+    */
 
     // --- AUTO-STEPS GENERATOR (Copy Steps Button) ---
     function generateAutoSteps(actions) {
@@ -555,9 +583,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Update Backend Logs
     if (sessionLogs.backend && sessionLogs.backend.length > 0) {
       const backendLogHtml = sessionLogs.backend.map(s => `
-        <div class="log-entry error" style="padding:12px; border-bottom:1px solid #eee;">
+        <div class="log-entry error log-jump-target" data-time-ms="${s.relativeMs || (parseSec(s.time) * 1000)}" style="padding:12px; border-bottom:1px solid #eee; cursor:pointer;">
           <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-            <strong style="color:#d93025;">${s.type}</strong>
+            <strong style="color:#d93025;"><span class="log-jump-btn">⏯️</span> ${s.type}</strong>
             <span style="color:#888; font-size:11px;">${s.time}</span>
           </div>
           <div style="font-weight:bold; margin-bottom:8px;">${s.message}</div>
@@ -756,10 +784,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- GLOBAL EVENT DELEGATION (Fix CSP onclick issue) ---
     document.addEventListener('click', (e) => {
-      // 1. JSON Tree Toggle
+      // 1. Log Jump to Video (Priority)
+      const jumpTrigger = e.target.closest('.log-jump-target');
+      if (jumpTrigger) {
+        // Check if we should skip jump (e.g. clicking strict detail buttons like in Actions)
+        const isActionDetailBtn = e.target.classList.contains('action-expand-btn');
+        const isJsonToggle = e.target.closest('[data-toggle="json"]');
+        
+        if (!isActionDetailBtn && !isJsonToggle) {
+          const timeMs = parseInt(jumpTrigger.getAttribute('data-time-ms'));
+          if (!isNaN(timeMs)) {
+            jumpToVideoTime(timeMs, jumpTrigger);
+          }
+        }
+      }
+
+      // 2. JSON Tree Toggle
       const jtToggle = e.target.closest('[data-toggle="json"]');
       if (jtToggle) {
-        e.stopPropagation();
+        // stopPropagation removed to allow bubbling/other logic if needed, 
+        // but since it's document listener, we just handle logic
         const targetId = jtToggle.getAttribute('data-target');
         const content = document.getElementById(targetId);
         const caret = jtToggle.querySelector('.jt-caret');
@@ -768,10 +812,9 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // 2. Console Entry Toggle
+      // 3. Console Entry Toggle
       const consoleToggle = e.target.closest('[data-toggle="console"]');
       if (consoleToggle) {
-        e.stopPropagation();
         const targetId = consoleToggle.getAttribute('data-target');
         const body = document.getElementById('body_' + targetId);
         const chev = document.getElementById('chev_' + targetId);
@@ -780,10 +823,9 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // 3. Action Detail Toggle
+      // 4. Action Detail Toggle
       const actionToggle = e.target.closest('[data-toggle="action"]');
       if (actionToggle) {
-        e.stopPropagation();
         const targetId = actionToggle.getAttribute('data-target');
         const detailPanel = document.getElementById('dp_' + targetId);
         if (detailPanel) {

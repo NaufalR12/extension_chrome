@@ -109,7 +109,11 @@ async function appendLog(type, payload) {
   
   // Inject relative video timer
   if (recordingStartTime) {
-    const elapsedSecs = Math.floor((Date.now() - recordingStartTime) / 1000);
+    const now = Date.now();
+    const elapsedMs = now - recordingStartTime;
+    payload.relativeMs = elapsedMs; // Raw ms for machine seeking
+
+    const elapsedSecs = Math.floor(elapsedMs / 1000);
     const m = Math.floor(elapsedSecs / 60).toString().padStart(2, '0');
     const s = (elapsedSecs % 60).toString().padStart(2, '0');
     payload.time = `[${m}:${s}] ` + (payload.time || "");

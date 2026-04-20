@@ -865,3 +865,43 @@ input[type="text"], textarea {
 .btn-copy-row:hover { background: #f1f3f4; color: #1a73e8; border-color: #1a73e8; }
 
 .lock-icon { margin-right: 4px; color: #d93025; font-size: 12px; }
+/* Log Jump & Active States */
+.log-jump-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  opacity: 0.4;
+  transition: all 0.2s;
+  user-select: none;
+  font-size: 14px;
+}
+
+.log-jump-btn:hover {
+  opacity: 1;
+  transform: scale(1.2);
+}
+
+.log-entry-active {
+  background-color: #e8f0fe !important;
+  border-left: 3px solid #1a73e8 !important;
+  transition: background-color 0.3s ease;
+}
+
+/* Timeline highlight for automatically synced logs */
+.active-timeline {
+  background-color: rgba(26, 115, 232, 0.05);
+}
+
+/* Ensure actions can be highlighted */
+.u-entry.log-entry-active {
+  background-color: #e8f0fe !important;
+  border-left: 3px solid #1a73e8 !important;
+}
+
+/* Table row highlight */
+tr.log-jump-target.log-entry-active td {
+  background-color: #e8f0fe !important;
+}
