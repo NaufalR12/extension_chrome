@@ -30,16 +30,19 @@ body {
   box-sizing: border-box;
 }
 
-.form-section {
+.review-top-row {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start; /* Aligns top of video and form */
   width: 100%;
-  max-width: 1000px;
-  margin: 0 auto;
+}
+
+.form-section, .video-section {
+  flex: 1; /* 50/50 split */
+  min-width: 0; /* Prevents overflow */
 }
 
 .video-section {
-  width: 100%;
-  max-width: 1000px;
-  margin: 0 auto;
   background: #000;
   border-radius: 8px;
   overflow: hidden;
@@ -48,7 +51,13 @@ body {
 .video-section video {
   display: block;
   width: 100%;
-  max-height: 60vh;
+  height: auto;
+  max-height: 70vh;
+}
+
+.form-section textarea#inputDesc {
+  min-height: 450px;
+  resize: vertical;
 }
 
 .logs-section {

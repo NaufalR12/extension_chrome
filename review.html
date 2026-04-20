@@ -12,36 +12,39 @@
     </div>
 
     <div class="main-content">
-      <!-- POSISI ATAS: BUG DETAILS FORM -->
-      <div class="form-section">
-        <div id="stepForm">
-          <div class="form-group">
-            <label>Bug Title</label>
-            <input type="text" id="inputTitle" placeholder="e.g. Broken Login Button on Mobile">
-          </div>
-          <div class="form-group">
-            <label>Description</label>
-            <textarea id="inputDesc" rows="3" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea>
-          </div>
+      <!-- POSISI ATAS: SPLIT VIEW (VIDEO & FORM) -->
+      <div class="review-top-row">
+        <!-- Kolom Kiri: Video -->
+        <div class="video-section">
+          <video id="videoPreview" controls autoplay></video>
         </div>
 
-        <div id="stepSuccess" class="hidden">
-          <div class="success-box">
-            <div class="success-icon">✅</div>
-            <div style="flex:1;">
-              <h2 style="margin:0; font-size:16px;">Successfully Uploaded!</h2>
-              <div class="flex gap-2 mt-2">
-                <input type="text" id="shareLink" readonly style="flex:1; padding:6px; font-size:12px;">
-                <button id="btnCopy" class="btn secondary" style="padding:6px 12px; font-size:12px;">Copy Link</button>
+        <!-- Kolom Kanan: Form -->
+        <div class="form-section">
+          <div id="stepForm">
+            <div class="form-group">
+              <label>Bug Title</label>
+              <input type="text" id="inputTitle" placeholder="e.g. Broken Login Button on Mobile">
+            </div>
+            <div class="form-group">
+              <label>Description</label>
+              <textarea id="inputDesc" rows="15" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea>
+            </div>
+          </div>
+
+          <div id="stepSuccess" class="hidden">
+            <div class="success-box">
+              <div class="success-icon">✅</div>
+              <div style="flex:1;">
+                <h2 style="margin:0; font-size:16px;">Successfully Uploaded!</h2>
+                <div class="flex gap-2 mt-2">
+                  <input type="text" id="shareLink" readonly style="flex:1; padding:6px; font-size:12px;">
+                  <button id="btnCopy" class="btn secondary" style="padding:6px 12px; font-size:12px;">Copy Link</button>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
-
-      <!-- POSISI TENGAH: VIDEO REPLAY -->
-      <div class="video-section">
-        <video id="videoPreview" controls autoplay></video>
       </div>
 
       <!-- POSISI BAWAH: TAB SYSTEM -->
