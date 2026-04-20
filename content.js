@@ -219,7 +219,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'GET_RESOLUTION') {
     sendResponse({ resolution: `${window.innerWidth}x${window.innerHeight}` });
   } else if (request.action === 'SHOW_WIDGET') {
-    createWidget();
+    createWidget(request.startTime || 0, request.isPaused || false);
     // Capture and send environment snapshot when recording starts
     const env = captureEnvironment();
     try {
@@ -236,7 +236,7 @@ let widgetContainer = null;
 let timerInterval = null;
 let secondsRecord = 0;
 
-function createWidget() {
+function createWidget(initialSeconds = 0, initiallyPaused = false) {
   if (widgetContainer) return;
   
   widgetContainer = document.createElement('div');
@@ -305,12 +305,14 @@ function createWidget() {
   
   const timer = document.createElement('div');
   timer.className = 'timer';
-  timer.innerText = '00:00';
+  const initM = String(Math.floor(initialSeconds / 60)).padStart(2, '0');
+  const initS = String(initialSeconds % 60).padStart(2, '0');
+  timer.innerText = `${initM}:${initS}`;
   
   const btnPause = document.createElement('button');
   btnPause.className = 'btn';
   btnPause.title = 'Pause Record';
-  btnPause.innerHTML = '⏸️'; // Simple emoji icon
+  btnPause.innerHTML = initiallyPaused ? '▶️' : '⏸️'; // Simple emoji icon
   
   const btnStop = document.createElement('button');
   btnStop.className = 'btn stop';
@@ -356,7 +358,7 @@ function createWidget() {
   };
   colorPickerWrapper.appendChild(btnClear);
 
-  let isPaused = false;
+  let isPaused = initiallyPaused;
   
   btnPause.addEventListener('click', () => {
     isPaused = !isPaused;
@@ -425,7 +427,7 @@ function createWidget() {
     isDragging = false;
   });
 
-  secondsRecord = 0;
+  secondsRecord = initialSeconds;
   timerInterval = setInterval(() => {
     if (!isPaused) {
       secondsRecord++;

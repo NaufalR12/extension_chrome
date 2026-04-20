@@ -17,7 +17,8 @@
   ],
   "host_permissions": [
     "https://www.googleapis.com/*",
-    "https://api.monday.com/v2"
+    "https://api.monday.com/v2",
+    "https://api.country.is/*"
   ],
   "background": {
     "service_worker": "background.js",

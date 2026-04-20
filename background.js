@@ -1,6 +1,23 @@
 let isRecording = false;
 let recordingStartTime = null;
+let isPaused = false;
+let cachedCountry = "Unknown";
 let headerCache = new Map(); // Store headers by URL during recording
+
+// Detect country on startup
+async function updateCountryCache() {
+  try {
+    const res = await fetch('https://api.country.is/');
+    const data = await res.json();
+    if (data && data.country) {
+      const displayNames = new Intl.DisplayNames(['en'], { type: 'region' });
+      cachedCountry = displayNames.of(data.country);
+    }
+  } catch (e) {
+    console.error("Failed to detect country:", e);
+  }
+}
+updateCountryCache();
 
 // Mask sensitive headers
 function maskHeaders(headers) {
@@ -187,6 +204,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const logs = data.sessionLogs || {};
         logs.info = { 
           url: request.payloadUrl || 'N/A',
+          location: cachedCountry || 'Unknown',
+          timestamp: new Date().toLocaleString(),
           urlTimeline: [{ time: 0, url: request.payloadUrl || 'N/A' }]
         };
         chrome.storage.local.set({ sessionLogs: logs });
@@ -203,13 +222,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             chrome.tabs.query({active: true, lastFocusedWindow: true}, function(tabs) {
               const targetTab = tabs[0];
               if (targetTab) {
-                chrome.tabs.sendMessage(targetTab.id, { action: 'SHOW_WIDGET' }).catch(() => {
+                const elapsed = recordingStartTime ? Math.floor((Date.now() - recordingStartTime) / 1000) : 0;
+                chrome.tabs.sendMessage(targetTab.id, { 
+                  action: 'SHOW_WIDGET', 
+                  startTime: elapsed, 
+                  isPaused: isPaused 
+                }).catch(() => {
                   chrome.scripting.executeScript({
                     target: { tabId: targetTab.id },
                     files: ['content.js']
                   }, () => {
                     if (!chrome.runtime.lastError) {
-                      chrome.tabs.sendMessage(targetTab.id, { action: 'SHOW_WIDGET' }).catch(() => {});
+                      chrome.tabs.sendMessage(targetTab.id, { 
+                        action: 'SHOW_WIDGET', 
+                        startTime: elapsed, 
+                        isPaused: isPaused 
+                      }).catch(() => {});
                     }
                   });
                 });
@@ -228,6 +256,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   else if (request.action === 'STOP_RECORDING') {
     isRecording = false;
     recordingStartTime = null;
+    isPaused = false;
     headerCache.clear();
     chrome.runtime.sendMessage({ target: 'offscreen', action: 'stopRecording' });
     chrome.tabs.query({active: true, lastFocusedWindow: true}, function(tabs) {
@@ -238,10 +267,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   else if (request.action === 'PAUSE_RECORDING') {
+    isPaused = true;
     chrome.runtime.sendMessage({ target: 'offscreen', action: 'pauseRecording' });
   } 
   
   else if (request.action === 'RESUME_RECORDING') {
+    isPaused = false;
     chrome.runtime.sendMessage({ target: 'offscreen', action: 'resumeRecording' });
   } 
   
@@ -287,7 +318,12 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       }
     });
 
-    chrome.tabs.sendMessage(tabId, { action: 'SHOW_WIDGET' }).catch(() => {});
+    const elapsed = recordingStartTime ? Math.floor((Date.now() - recordingStartTime) / 1000) : 0;
+    chrome.tabs.sendMessage(tabId, { 
+      action: 'SHOW_WIDGET', 
+      startTime: elapsed, 
+      isPaused: isPaused 
+    }).catch(() => {});
   }
 });
 
