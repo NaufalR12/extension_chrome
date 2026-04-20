@@ -777,3 +777,91 @@ input[type="text"], textarea {
   font-family: inherit;
 }
 .action-expand-btn:hover { text-decoration: underline; }
+
+/* =============================================
+   APP STATE REPORTING TABLES (Storage & Cookies)
+   ============================================= */
+.badge-count {
+  background: #dadce0;
+  color: #3c4043;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.table-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.env-search {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 12px;
+  outline: none;
+}
+.env-search:focus { border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,0.1); }
+
+.btn-copy-env {
+  padding: 6px 12px;
+  background: #f1f3f4;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  color: #3c4043;
+}
+.btn-copy-env:hover { background: #e8eaed; }
+
+.env-table-wrapper {
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid #e1e4e8;
+  border-radius: 4px;
+}
+.env-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+}
+.env-table th {
+  background: #f8f9fa;
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid #e1e4e8;
+  color: #5f6368;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.env-table td {
+  padding: 8px;
+  border-bottom: 1px solid #f1f3f4;
+  word-break: break-all;
+  max-width: 300px;
+  vertical-align: top;
+}
+.env-table tr:hover { background: #fafbfc; }
+
+.val-pretty {
+  white-space: pre-wrap;
+  color: #188038;
+}
+.val-raw { color: #5f6368; font-style: italic; }
+
+.btn-copy-row {
+  background: none;
+  border: 1px solid #dadce0;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  color: #70757a;
+}
+.btn-copy-row:hover { background: #f1f3f4; color: #1a73e8; border-color: #1a73e8; }
+
+.lock-icon { margin-right: 4px; color: #d93025; font-size: 12px; }

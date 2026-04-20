@@ -82,21 +82,18 @@ function getXPath(el) {
 // Capture environment snapshot (called when recording starts)
 function captureEnvironment() {
   try {
-    // LocalStorage keys (max 20, sensor sensitif)
-    const sensitiveKeys = ['password', 'token', 'secret', 'key', 'auth', 'credential'];
+    // LocalStorage keys (capture all, no masking)
     const localStorageData = {};
-    for (let i = 0; i < Math.min(window.localStorage.length, 20); i++) {
+    for (let i = 0; i < window.localStorage.length; i++) {
       const k = window.localStorage.key(i);
-      const isSensitive = sensitiveKeys.some(s => k.toLowerCase().includes(s));
-      localStorageData[k] = isSensitive ? '***** Auto-filtered' : window.localStorage.getItem(k).substring(0, 200);
+      localStorageData[k] = window.localStorage.getItem(k);
     }
 
-    // SessionStorage keys (max 20)
+    // SessionStorage keys (capture all, no masking)
     const sessionStorageData = {};
-    for (let i = 0; i < Math.min(window.sessionStorage.length, 20); i++) {
+    for (let i = 0; i < window.sessionStorage.length; i++) {
       const k = window.sessionStorage.key(i);
-      const isSensitive = sensitiveKeys.some(s => k.toLowerCase().includes(s));
-      sessionStorageData[k] = isSensitive ? '***** Auto-filtered' : window.sessionStorage.getItem(k).substring(0, 200);
+      sessionStorageData[k] = window.sessionStorage.getItem(k);
     }
 
     // Cookies - hanya nama dan count, bukan nilai
@@ -229,8 +226,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   } else if (request.action === 'HIDE_WIDGET') {
     removeWidget();
     sendResponse({ ok: true });
+  } else if (request.action === 'BUGLENS_GET_STORAGE') {
+    sendResponse(getStorageSnapshot());
   }
 });
+
+function getStorageSnapshot() {
+  const ls = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    ls[key] = localStorage.getItem(key);
+  }
+  const ss = {};
+  for (let i = 0; i < sessionStorage.length; i++) {
+    const key = sessionStorage.key(i);
+    ss[key] = sessionStorage.getItem(key);
+  }
+  return { localStorage: ls, sessionStorage: ss };
+}
 
 let widgetContainer = null;
 let timerInterval = null;

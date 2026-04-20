@@ -12,10 +12,12 @@
     "scripting",
     "alarms",
     "offscreen",
+    "cookies",
     "webRequest",
     "webRequestExtraHeaders"
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://www.googleapis.com/*",
     "https://api.monday.com/v2",
     "https://api.country.is/*"

@@ -297,6 +297,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.toString() }));
     return true;
   }
+
+  // --- APP STATE REPORTING (Cookies) ---
+  else if (request.action === 'BUGLENS_GET_COOKIES') {
+    const cookieOptions = {};
+    if (request.url) {
+      cookieOptions.url = request.url;
+    } else if (sender.tab && sender.tab.url) {
+      cookieOptions.url = sender.tab.url;
+    }
+
+    chrome.cookies.getAll(cookieOptions, (cookies) => {
+      sendResponse({ cookies: cookies || [] });
+    });
+    return true; // async
+  }
+});
+
+// Real-time Cookie Sync
+chrome.cookies.onChanged.addListener((changeInfo) => {
+  // Broadcast to any open review pages or active tabs if necessary
+  // For now, we update local storage or send message to update UI
+  chrome.runtime.sendMessage({ 
+    action: 'BUGLENS_COOKIE_CHANGED', 
+    change: changeInfo 
+  }).catch(() => {}); // Avoid error when no listeners
 });
 
 // Track navigations while recording, and restore floating widget when page changes

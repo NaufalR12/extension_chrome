@@ -65,21 +65,47 @@
                 </div>
               </div>
 
-              <!-- Environment Storage Snapshot -->
+              <!-- APP STATE REPORTING (LocalStorage, SessionStorage, Cookies) -->
               <div class="visited-urls-wrapper mt-3" id="envSection" style="display:none;">
-                <div class="visited-urls-header" style="cursor:pointer;user-select:none;" onclick="const b=document.getElementById('envBody'); b.style.display=b.style.display==='none'?'block':'none';">📦 Storage Snapshot <span style="font-size:11px;color:#888;font-weight:normal;">(click to expand)</span></div>
-                <div id="envBody" style="display:none;padding:12px;">
-                  <div style="margin-bottom:12px;">
-                    <div style="font-size:11px;font-weight:600;color:#5f6368;margin-bottom:6px;">LocalStorage</div>
-                    <div id="envLocalStorage" style="font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:4px;border:1px solid #e1e4e8;"></div>
+                <div class="visited-urls-header" style="cursor:pointer;user-select:none;" data-toggle-env="ls">📦 Local Storage <span class="badge-count" id="countLS">0</span> <span style="font-size:11px;color:#888;font-weight:normal;float:right;">(click to toggle)</span></div>
+                <div id="envBodyLS" style="display:none;padding:12px;">
+                  <div class="table-toolbar">
+                    <input type="text" class="env-search" data-filter-env="ls" placeholder="Search keys or values...">
+                    <button class="btn-copy-env" data-copy-env="ls">Copy All</button>
                   </div>
-                  <div style="margin-bottom:12px;">
-                    <div style="font-size:11px;font-weight:600;color:#5f6368;margin-bottom:6px;">SessionStorage</div>
-                    <div id="envSessionStorage" style="font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:4px;border:1px solid #e1e4e8;"></div>
+                  <div class="env-table-wrapper">
+                    <table class="env-table" id="tableLS">
+                      <thead><tr><th>Key</th><th>Value</th><th>Action</th></tr></thead>
+                      <tbody></tbody>
+                    </table>
                   </div>
-                  <div>
-                    <div style="font-size:11px;font-weight:600;color:#5f6368;margin-bottom:6px;">Cookie Names</div>
-                    <div id="envCookies" style="font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:4px;border:1px solid #e1e4e8;"></div>
+                </div>
+
+                <div class="visited-urls-header" style="cursor:pointer;user-select:none;border-top:1px solid #e1e4e8;" data-toggle-env="ss">📦 Session Storage <span class="badge-count" id="countSS">0</span> <span style="font-size:11px;color:#888;font-weight:normal;float:right;">(click to toggle)</span></div>
+                <div id="envBodySS" style="display:none;padding:12px;">
+                  <div class="table-toolbar">
+                    <input type="text" class="env-search" data-filter-env="ss" placeholder="Search keys or values...">
+                    <button class="btn-copy-env" data-copy-env="ss">Copy All</button>
+                  </div>
+                  <div class="env-table-wrapper">
+                    <table class="env-table" id="tableSS">
+                      <thead><tr><th>Key</th><th>Value</th><th>Action</th></tr></thead>
+                      <tbody></tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div class="visited-urls-header" style="cursor:pointer;user-select:none;border-top:1px solid #e1e4e8;" data-toggle-env="ck">🍪 Cookies <span class="badge-count" id="countCK">0</span> <span style="font-size:11px;color:#888;font-weight:normal;float:right;">(click to toggle)</span></div>
+                <div id="envBodyCK" style="display:none;padding:12px;">
+                  <div class="table-toolbar">
+                    <input type="text" class="env-search" data-filter-env="ck" placeholder="Search name, value or domain...">
+                    <button class="btn-copy-env" data-copy-env="ck">Copy All</button>
+                  </div>
+                  <div class="env-table-wrapper">
+                    <table class="env-table" id="tableCK">
+                      <thead><tr><th>Name</th><th>Value</th><th>Domain</th><th>HttpOnly</th><th>Action</th></tr></thead>
+                      <tbody></tbody>
+                    </table>
                   </div>
                 </div>
               </div>

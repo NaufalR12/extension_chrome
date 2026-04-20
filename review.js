@@ -624,28 +624,134 @@ document.addEventListener('DOMContentLoaded', () => {
       const cookieEl = document.getElementById('infoCookies');
       if (cookieEl) cookieEl.textContent = env.cookieCount != null ? `${env.cookieCount} cookies (${(env.cookieNames || []).slice(0,5).join(', ')}${env.cookieCount > 5 ? '...' : ''})` : '-';
 
-      // Show storage snapshot section
+      // --- APP STATE REPORTING (Advanced UI) ---
       const envSection = document.getElementById('envSection');
-      if (envSection) envSection.style.display = '';
+      if (envSection) envSection.style.display = 'block';
 
-      const lsEl = document.getElementById('envLocalStorage');
-      if (lsEl) {
-        const lsKeys = Object.keys(env.localStorage || {});
-        lsEl.textContent = lsKeys.length > 0
-          ? lsKeys.map(k => `${k}: ${env.localStorage[k]}`).join('\n')
-          : '(empty)';
+      let currentLS = env.localStorage || {};
+      let currentSS = env.sessionStorage || {};
+      let currentCK = []; // Will fetch from BG or logs
+
+      // 1. Initial Render
+      renderEnvTable('LS', currentLS);
+      renderEnvTable('SS', currentSS);
+
+      // Fetch cookies from background if available, else use logs
+      chrome.runtime.sendMessage({ 
+        action: 'BUGLENS_GET_COOKIES', 
+        url: sessionLogs.info?.url 
+      }, (res) => {
+        if (res && res.cookies) {
+          currentCK = res.cookies;
+          renderEnvTable('CK', currentCK);
+        }
+      });
+
+      // 2. Toggles
+      document.querySelectorAll('[data-toggle-env]').forEach(h => {
+        h.addEventListener('click', () => {
+          const type = h.getAttribute('data-toggle-env').toUpperCase();
+          const body = document.getElementById(`envBody${type}`);
+          if (body) body.style.display = body.style.display === 'none' ? 'block' : 'none';
+        });
+      });
+
+      // 3. Search handling
+      document.querySelectorAll('.env-search').forEach(input => {
+        input.addEventListener('input', (e) => {
+          const type = input.getAttribute('data-filter-env').toUpperCase();
+          const query = e.target.value.toLowerCase();
+          const data = type === 'LS' ? currentLS : (type === 'SS' ? currentSS : currentCK);
+          renderEnvTable(type, data, query);
+        });
+      });
+
+      // 4. Copy All handling
+      document.querySelectorAll('.btn-copy-env').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const type = btn.getAttribute('data-copy-env').toUpperCase();
+          const data = type === 'LS' ? currentLS : (type === 'SS' ? currentSS : currentCK);
+          navigator.clipboard.writeText(JSON.stringify(data, null, 2));
+          btn.textContent = 'Copied!';
+          setTimeout(() => btn.textContent = 'Copy All', 2000);
+        });
+      });
+
+      // 5. JSON Parsing Helper
+      function smartParse(str) {
+        try {
+          const obj = JSON.parse(str);
+          if (obj && typeof obj === 'object') return { isJson: true, val: JSON.stringify(obj, null, 2) };
+        } catch(e) {}
+        return { isJson: false, val: str };
       }
-      const ssEl = document.getElementById('envSessionStorage');
-      if (ssEl) {
-        const ssKeys = Object.keys(env.sessionStorage || {});
-        ssEl.textContent = ssKeys.length > 0
-          ? ssKeys.map(k => `${k}: ${env.sessionStorage[k]}`).join('\n')
-          : '(empty)';
+
+      function renderEnvTable(type, data, filter = '') {
+        const tbody = document.querySelector(`#table${type} tbody`);
+        if (!tbody) return;
+        tbody.innerHTML = '';
+        
+        let count = 0;
+        if (type === 'CK') {
+          const filtered = data.filter(c => 
+            c.name.toLowerCase().includes(filter) || 
+            (c.value||'').toLowerCase().includes(filter) || 
+            (c.domain||'').toLowerCase().includes(filter)
+          );
+          count = filtered.length;
+          tbody.innerHTML = filtered.map(c => `
+            <tr>
+              <td><strong>${c.name}</strong></td>
+              <td class="val-raw">${c.value}</td>
+              <td>${c.domain}</td>
+              <td style="text-align:center">${c.httpOnly ? '<span class="lock-icon" title="HttpOnly">🔒</span>' : ''}</td>
+              <td><button class="btn-copy-row" data-copy-val='${JSON.stringify(c).replace(/'/g,"&apos;")}'>Copy</button></td>
+            </tr>
+          `).join('');
+        } else {
+          const keys = Object.keys(data).filter(k => 
+            k.toLowerCase().includes(filter) || 
+            (data[k]||'').toLowerCase().includes(filter)
+          );
+          count = keys.length;
+          tbody.innerHTML = keys.map(k => {
+            const { isJson, val } = smartParse(data[k]);
+            return `
+              <tr>
+                <td><strong>${k}</strong></td>
+                <td class="${isJson ? 'val-pretty' : 'val-raw'}">${val}</td>
+                <td><button class="btn-copy-row" data-copy-val='${JSON.stringify({key:k, value:data[k]}).replace(/'/g,"&apos;")}'>Copy</button></td>
+              </tr>
+            `;
+          }).join('');
+        }
+        document.getElementById(`count${type}`).textContent = count;
+
+        // Attach row copy listeners
+        tbody.querySelectorAll('.btn-copy-row').forEach(btn => {
+          btn.onclick = (e) => {
+            e.stopPropagation();
+            navigator.clipboard.writeText(btn.getAttribute('data-copy-val'));
+            const og = btn.textContent;
+            btn.textContent = 'Copied';
+            setTimeout(() => btn.textContent = og, 2000);
+          };
+        });
       }
-      const cookiesEl = document.getElementById('envCookies');
-      if (cookiesEl) {
-        cookiesEl.textContent = (env.cookieNames || []).join('\n') || '(none)';
-      }
+
+      // 6. Real-time Cookie Update Listener
+      chrome.runtime.onMessage.addListener((req) => {
+        if (req.action === 'BUGLENS_COOKIE_CHANGED') {
+          // Re-fetch all to be accurate
+          chrome.runtime.sendMessage({ action: 'BUGLENS_GET_COOKIES' }, (res) => {
+            if (res && res.cookies) {
+              currentCK = res.cookies;
+              const filter = document.querySelector('[data-filter-env="ck"]').value;
+              renderEnvTable('CK', currentCK, filter.toLowerCase());
+            }
+          });
+        }
+      });
     }
 
     // --- GLOBAL EVENT DELEGATION (Fix CSP onclick issue) ---
