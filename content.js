@@ -48,12 +48,103 @@ function getElementAttributes(el) {
   return attrs + '>';
 }
 
+// Generate XPath for an element
+function getXPath(el) {
+  if (!el || el.nodeType !== 1) return '';
+  if (el.id) return `//*[@id="${el.id}"]`;
+  const parts = [];
+  let node = el;
+  while (node && node.nodeType === 1) {
+    let idx = 1;
+    let sib = node.previousSibling;
+    while (sib) {
+      if (sib.nodeType === 1 && sib.nodeName === node.nodeName) idx++;
+      sib = sib.previousSibling;
+    }
+    parts.unshift(`${node.nodeName.toLowerCase()}[${idx}]`);
+    node = node.parentNode;
+  }
+  return '/' + parts.join('/');
+}
+
+// Capture environment snapshot (called when recording starts)
+function captureEnvironment() {
+  try {
+    // LocalStorage keys (max 20, sensor sensitif)
+    const sensitiveKeys = ['password', 'token', 'secret', 'key', 'auth', 'credential'];
+    const localStorageData = {};
+    for (let i = 0; i < Math.min(window.localStorage.length, 20); i++) {
+      const k = window.localStorage.key(i);
+      const isSensitive = sensitiveKeys.some(s => k.toLowerCase().includes(s));
+      localStorageData[k] = isSensitive ? '***** Auto-filtered' : window.localStorage.getItem(k).substring(0, 200);
+    }
+
+    // SessionStorage keys (max 20)
+    const sessionStorageData = {};
+    for (let i = 0; i < Math.min(window.sessionStorage.length, 20); i++) {
+      const k = window.sessionStorage.key(i);
+      const isSensitive = sensitiveKeys.some(s => k.toLowerCase().includes(s));
+      sessionStorageData[k] = isSensitive ? '***** Auto-filtered' : window.sessionStorage.getItem(k).substring(0, 200);
+    }
+
+    // Cookies - hanya nama dan count, bukan nilai
+    const cookieNames = document.cookie.split(';').map(c => c.split('=')[0].trim()).filter(Boolean);
+
+    return {
+      localStorage: localStorageData,
+      sessionStorage: sessionStorageData,
+      cookieCount: cookieNames.length,
+      cookieNames: cookieNames,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      language: navigator.language,
+      onlineStatus: navigator.onLine
+    };
+  } catch (e) {
+    return { error: 'Could not capture environment: ' + e.message };
+  }
+}
+
+// Scroll Tracker (debounced, max 1 entry per 2 seconds)
+let lastScrollTime = 0;
+let scrollDirection = null;
+let scrollStartY = window.scrollY;
+
+window.addEventListener('scroll', () => {
+  const now = Date.now();
+  if (now - lastScrollTime < 2000) return;
+  lastScrollTime = now;
+
+  const currentY = window.scrollY;
+  const delta = currentY - scrollStartY;
+  if (Math.abs(delta) < 100) return; // Ignore small scrolls
+
+  const dir = delta > 0 ? 'down' : 'up';
+  const target = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+  const targetDesc = target ? `<${target.tagName.toLowerCase()}>` : 'page';
+
+  try {
+    chrome.runtime.sendMessage({
+      action: 'LOG_CAPTURED',
+      type: 'ACTIONS',
+      payload: {
+        time: new Date().toISOString(),
+        event: 'Scroll',
+        element: targetDesc,
+        value: `${dir} ${Math.abs(Math.round(delta))}px (position: ${Math.round(currentY)}px)`
+      }
+    });
+  } catch(err) {}
+
+  scrollStartY = currentY;
+}, { passive: true });
+
 // Capture Actions (clicks and inputs)
 document.addEventListener('click', (e) => {
   const target = e.target;
   if (!target) return;
   
   const elementDesc = getElementAttributes(target);
+  const xpath = getXPath(target);
   
   try {
     chrome.runtime.sendMessage({
@@ -63,7 +154,8 @@ document.addEventListener('click', (e) => {
         time: new Date().toISOString(),
         event: 'Click',
         element: elementDesc,
-        fullHtml: target.outerHTML.substring(0, 1000)
+        fullHtml: target.outerHTML.substring(0, 1000),
+        xpath: xpath
       }
     });
   } catch(err) {}
@@ -108,6 +200,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ resolution: `${window.innerWidth}x${window.innerHeight}` });
   } else if (request.action === 'SHOW_WIDGET') {
     createWidget();
+    // Capture and send environment snapshot when recording starts
+    const env = captureEnvironment();
+    try {
+      chrome.runtime.sendMessage({ action: 'SAVE_ENVIRONMENT', payload: env });
+    } catch(e) {}
     sendResponse({ ok: true });
   } else if (request.action === 'HIDE_WIDGET') {
     removeWidget();

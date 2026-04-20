@@ -47,12 +47,40 @@
                 
                 <div class="meta-label">Window size</div>
                 <div class="meta-value" id="infoRes">-</div>
+
+                <div class="meta-label">Timezone</div>
+                <div class="meta-value" id="infoTimezone">-</div>
+
+                <div class="meta-label">Language</div>
+                <div class="meta-value" id="infoLanguage">-</div>
+
+                <div class="meta-label">Cookies</div>
+                <div class="meta-value" id="infoCookies">-</div>
               </div>
               
               <div class="visited-urls-wrapper mt-3">
                 <div class="visited-urls-header">Visited URLs</div>
                 <div id="visitedUrlsList" class="visited-urls-list">
                   <!-- URL list will be rendered here -->
+                </div>
+              </div>
+
+              <!-- Environment Storage Snapshot -->
+              <div class="visited-urls-wrapper mt-3" id="envSection" style="display:none;">
+                <div class="visited-urls-header" style="cursor:pointer;user-select:none;" onclick="const b=document.getElementById('envBody'); b.style.display=b.style.display==='none'?'block':'none';">📦 Storage Snapshot <span style="font-size:11px;color:#888;font-weight:normal;">(click to expand)</span></div>
+                <div id="envBody" style="display:none;padding:12px;">
+                  <div style="margin-bottom:12px;">
+                    <div style="font-size:11px;font-weight:600;color:#5f6368;margin-bottom:6px;">LocalStorage</div>
+                    <div id="envLocalStorage" style="font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:4px;border:1px solid #e1e4e8;"></div>
+                  </div>
+                  <div style="margin-bottom:12px;">
+                    <div style="font-size:11px;font-weight:600;color:#5f6368;margin-bottom:6px;">SessionStorage</div>
+                    <div id="envSessionStorage" style="font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:4px;border:1px solid #e1e4e8;"></div>
+                  </div>
+                  <div>
+                    <div style="font-size:11px;font-weight:600;color:#5f6368;margin-bottom:6px;">Cookie Names</div>
+                    <div id="envCookies" style="font-family:monospace;font-size:11px;background:#f8f9fa;padding:8px;border-radius:4px;border:1px solid #e1e4e8;"></div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -69,6 +97,7 @@
                 <button class="pill active" id="toggleNav"><span>•</span> Page navigations</button>
                 <button class="pill active" id="toggleNetErr"><span>⇄</span> Network errors</button>
                 <button class="pill active" id="toggleUsrAct"><span>🖱</span> User activity</button>
+                <button class="pill active" id="toggleThirdParty"><span>🔌</span> 3rd Party</button>
               </div>
               <div id="consoleLogs" class="log-container unified-log-list"></div>
             </div>
@@ -146,7 +175,10 @@
             
             <!-- ACTIONS TAB -->
             <div id="tabActions" class="panel">
-               <div id="actionLogs" class="log-container unified-log-list"></div>
+              <div class="log-toolbar" style="justify-content:flex-end;padding:8px 12px;">
+                <button id="btnCopySteps" class="pill-sm" style="cursor:pointer;background:#1a73e8;color:white;border:none;padding:4px 12px;border-radius:4px;font-size:12px;">📋 Copy Steps</button>
+              </div>
+              <div id="actionLogs" class="log-container unified-log-list"></div>
             </div>
             
             <!-- BACKEND TAB -->

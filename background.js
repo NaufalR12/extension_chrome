@@ -48,6 +48,17 @@ chrome.webRequest.onResponseStarted.addListener(
     const entry = headerCache.get(url);
     entry.response = maskHeaders(flattenHeaders(details.responseHeaders));
     entry.status = details.statusCode;
+
+    // Ekstrak Trace IDs dari response headers
+    const traceHeaderNames = ['x-trace-id', 'x-request-id', 'traceparent', 'x-amzn-trace-id', 'cf-ray', 'x-b3-traceid'];
+    const rawHeaders = flattenHeaders(details.responseHeaders);
+    const traceIds = {};
+    traceHeaderNames.forEach(h => {
+      if (rawHeaders[h]) traceIds[h] = rawHeaders[h];
+    });
+    if (Object.keys(traceIds).length > 0) {
+      entry.traceIds = traceIds;
+    }
   },
   { urls: ["<all_urls>"] },
   ["responseHeaders", "extraHeaders"]
@@ -100,7 +111,25 @@ async function appendLog(type, payload) {
         if (!payload.status) payload.status = cached.status;
       }
     }
+    // Enrich dengan trace IDs dari cache
+    const cached = headerCache.get(payload.url);
+    if (cached && cached.traceIds) {
+      payload.traceIds = cached.traceIds;
+    }
     logs.network.push(payload);
+    
+    // Jika status 4xx atau 5xx, tambahkan ke backend sebagai API Failure
+    const status = payload.status;
+    if (status && typeof status === 'number' && status >= 400) {
+      const traceInfo = payload.traceIds ? Object.entries(payload.traceIds).map(([k,v]) => `${k}: ${v}`).join(' | ') : '';
+      logs.backend.push({
+        time: payload.time,
+        type: 'API Failure',
+        message: `${payload.method} ${payload.url} → ${status}`,
+        stack: traceInfo ? `Trace IDs:\n${traceInfo}` : '',
+        source: payload.url
+      });
+    }
   }
   
   // Keep size manageable
@@ -133,6 +162,17 @@ let pendingVideoBase64 = null;
 
 // Unified message listener
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // 0. Save environment snapshot
+  if (request.action === 'SAVE_ENVIRONMENT') {
+    chrome.storage.local.get(['sessionLogs'], (data) => {
+      const logs = data.sessionLogs || {};
+      if (!logs.info) logs.info = {};
+      logs.info.environment = request.payload;
+      chrome.storage.local.set({ sessionLogs: logs });
+    });
+    return;
+  }
+
   // 1. Session Logging
   if (request.action === 'LOG_CAPTURED') {
     if (isRecording) {

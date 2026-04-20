@@ -52,6 +52,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let showPageNav = true;
     let showNetErr = true;
     let showUsrAct = true;
+    let showThirdParty = true;
+
+    // Deteksi domain utama dari sessionLogs.info
+    const mainDomain = (() => {
+      try {
+        const url = sessionLogs.info && sessionLogs.info.url ? sessionLogs.info.url : '';
+        return url ? new URL(url).hostname : '';
+      } catch(e) { return ''; }
+    })();
     
     function renderUnified() {
       const filtered = unified.filter(item => {
@@ -61,6 +70,18 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!isErr) return false;
         }
         if (!showUsrAct && item._cat === 'action' && !item.event.includes('Navigated')) return false;
+        if (!showThirdParty && item._cat === 'network' && mainDomain) {
+          try { 
+            const itemDomain = new URL(item.url).hostname;
+            if (itemDomain !== mainDomain) return false;
+          } catch(e) {}
+        }
+        if (!showThirdParty && item._cat === 'console') {
+          // Filter log dari URL yang berbeda domain jika tersedia
+          if (item.url && mainDomain) {
+            try { if (new URL(item.url).hostname !== mainDomain) return false; } catch(e) {}
+          }
+        }
         
         if (uSearch) {
           const lowerS = uSearch.toLowerCase();
@@ -101,11 +122,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const tagName = tagMatch ? tagMatch[1] : 'element';
             const attrs = rawEl.replace(/^<[a-z0-9]+/i, '').replace(/>$/, '').trim();
             const cleanFull = (item.fullHtml || item.element || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const xpathLine = item.xpath ? `<div style="font-size:10px;color:#888;margin-top:2px;font-family:monospace;">XPath: ${item.xpath}</div>` : '';
             
             content = `Clicked <b>&lt;${tagName}</b> 
                       ${attrs ? `<span class="attr-text" style="color:#666; font-family:monospace;">${attrs.substring(0, 50)}${attrs.length > 50 ? '...' : ''}</span>` : ''}
                       <b>&gt;</b>
                       <span class="collapse-toggle" style="float:right;color:#1a73e8;cursor:pointer;font-size:11px;" onclick="event.stopPropagation(); const pre = this.parentElement.querySelector('pre'); pre.style.display = pre.style.display === 'block' ? 'none' : 'block'; this.innerText = pre.style.display === 'block' ? 'collapse' : 'expand';">expand</span>
+                      ${xpathLine}
                       <pre class="code-block" style="display:none;margin-top:8px;padding:10px;background:#f8f9fa;color:#d93025;border-radius:4px;font-size:11px;overflow-x:auto;border:1px solid #eee;white-space:pre-wrap;">${cleanFull}</pre>`;
           } else if (isType) {
             icon = '⌨️';
@@ -135,6 +158,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (tNet) tNet.addEventListener('click', () => { showNetErr = !showNetErr; tNet.classList.toggle('active', showNetErr); renderUnified(); });
     const tUsr = document.getElementById('toggleUsrAct');
     if (tUsr) tUsr.addEventListener('click', () => { showUsrAct = !showUsrAct; tUsr.classList.toggle('active', showUsrAct); renderUnified(); });
+    const tThird = document.getElementById('toggleThirdParty');
+    if (tThird) tThird.addEventListener('click', () => { showThirdParty = !showThirdParty; tThird.classList.toggle('active', showThirdParty); renderUnified(); });
 
     // --- NETWORK LOGIC ---
     let nSearch = '';
@@ -312,6 +337,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const isNav = a.event && a.event.includes('Navigated');
         const isClick = a.event && a.event.includes('Click');
         const isInput = a.event && (a.event.includes('Typed') || a.event.includes('Input') || a.event.includes('Change'));
+        const isScroll = a.event && a.event.includes('Scroll');
         
         let icon = '🪄', content = '', css = '';
         if (isNav) {
@@ -325,6 +351,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const tagName = tagMatch ? tagMatch[1] : 'element';
             const attrs = rawEl.replace(/^<[a-z0-9]+/i, '').replace(/>$/, '').trim();
             const cleanFull = (a.fullHtml || a.element || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const xpathLine = a.xpath ? `<div style="font-size:10px;color:#888;margin-top:2px;font-family:monospace;">XPath: ${a.xpath}</div>` : '';
 
             content = `Clicked <b>&lt;${tagName}</b> 
                       ${attrs ? `<span class="attr-text" style="color:#666; font-family:monospace;">${attrs.substring(0, 50)}${attrs.length > 50 ? '...' : ''}</span>` : ''}
@@ -335,6 +362,9 @@ document.addEventListener('DOMContentLoaded', () => {
             icon = '⌨️'; css = 'typed';
             const val = a.value || '***';
             content = `Typed <b style="background:#f0f0f0;padding:2px 4px;border-radius:4px;font-family:monospace;font-weight:normal;border:1px solid #ddd;">${val}</b>`;
+        } else if (isScroll) {
+            icon = '📜'; css = '';
+            content = `<span style="color:#5f6368;">Scrolled</span> <b style="background:#f0f0f0;padding:2px 4px;border-radius:4px;font-family:monospace;font-weight:normal;border:1px solid #ddd;">${a.value || '?'}</b>`;
         } else {
             content = `<strong>${a.event}</strong><br><small>${a.element}</small>`;
         }
@@ -354,6 +384,53 @@ document.addEventListener('DOMContentLoaded', () => {
         videoPreview.currentTime = t;
       });
     });
+
+    // --- AUTO-STEPS GENERATOR (Copy Steps Button) ---
+    function generateAutoSteps(actions) {
+      return actions.map((a, i) => {
+        const n = i + 1;
+        const t = (a.time || '').replace(/[\[\]]/g, '').trim();
+        const timeStr = t ? `[${t}]` : '';
+        const isNav = a.event && a.event.includes('Navigated');
+        const isClick = a.event && a.event.includes('Click');
+        const isTyped = a.event && a.event.includes('Typed');
+        const isScroll = a.event && a.event.includes('Scroll');
+
+        if (isNav) return `${n}. ${timeStr} Navigated to ${a.element || '?'}`;
+        if (isClick) {
+          const tagMatch = (a.element || '').match(/^<([a-z0-9]+)/i);
+          const tag = tagMatch ? tagMatch[1] : 'element';
+          const idMatch = (a.element || '').match(/id="([^"]+)"/);
+          const id = idMatch ? `#${idMatch[1]}` : '';
+          const textContent = (a.fullHtml || '').replace(/<[^>]+>/g, '').trim().substring(0, 40);
+          return `${n}. ${timeStr} Clicked <${tag}>${id}${textContent ? ` "${textContent}"` : ''}`;
+        }
+        if (isTyped) {
+          const val = a.value === '***' ? '[password]' : (a.value || '').substring(0, 50);
+          const tagMatch = (a.element || '').match(/id="([^"]+)"/);
+          const id = tagMatch ? `#${tagMatch[1]}` : (a.element || '').match(/^<([a-z0-9]+)/i)?.[1] || 'input';
+          return `${n}. ${timeStr} Typed "${val}" in ${id}`;
+        }
+        if (isScroll) return `${n}. ${timeStr} Scrolled ${a.value || '?'}`;
+        return `${n}. ${timeStr} ${a.event || 'Action'}: ${a.element || ''}`;
+      }).join('\n');
+    }
+
+    const btnCopySteps = document.getElementById('btnCopySteps');
+    if (btnCopySteps) {
+      btnCopySteps.addEventListener('click', () => {
+        const steps = generateAutoSteps(sessionLogs.actions || []);
+        if (!steps) {
+          btnCopySteps.textContent = 'No steps!';
+          setTimeout(() => { btnCopySteps.innerHTML = '📋 Copy Steps'; }, 2000);
+          return;
+        }
+        navigator.clipboard.writeText(steps).then(() => {
+          btnCopySteps.textContent = 'Copied!';
+          setTimeout(() => { btnCopySteps.innerHTML = '📋 Copy Steps'; }, 2000);
+        });
+      });
+    }
 
     // Update Backend Logs
     if (sessionLogs.backend && sessionLogs.backend.length > 0) {
@@ -409,12 +486,47 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
 
-    // Populate Environment Info (inside callback to use sessionLogs if needed)
+    // Populate Environment Info
     document.getElementById('infoBrowser').textContent = sessionLogs.info?.browser || getBrowserInfo();
     document.getElementById('infoOS').textContent = sessionLogs.info?.os || getOSInfo();
     document.getElementById('infoRes').textContent = sessionLogs.info?.resolution || (window.screen.width + 'x' + window.screen.height);
     document.getElementById('infoLocation').textContent = sessionLogs.info?.location || "-";
     document.getElementById('infoTimestamp').textContent = sessionLogs.info?.timestamp || "Unknown";
+
+    // Render environment snapshot if available
+    const env = sessionLogs.info?.environment;
+    if (env) {
+      // Timezone, Language, Cookies
+      const tzEl = document.getElementById('infoTimezone');
+      if (tzEl) tzEl.textContent = env.timezone || '-';
+      const langEl = document.getElementById('infoLanguage');
+      if (langEl) langEl.textContent = env.language || '-';
+      const cookieEl = document.getElementById('infoCookies');
+      if (cookieEl) cookieEl.textContent = env.cookieCount != null ? `${env.cookieCount} cookies (${(env.cookieNames || []).slice(0,5).join(', ')}${env.cookieCount > 5 ? '...' : ''})` : '-';
+
+      // Show storage snapshot section
+      const envSection = document.getElementById('envSection');
+      if (envSection) envSection.style.display = '';
+
+      const lsEl = document.getElementById('envLocalStorage');
+      if (lsEl) {
+        const lsKeys = Object.keys(env.localStorage || {});
+        lsEl.textContent = lsKeys.length > 0
+          ? lsKeys.map(k => `${k}: ${env.localStorage[k]}`).join('\n')
+          : '(empty)';
+      }
+      const ssEl = document.getElementById('envSessionStorage');
+      if (ssEl) {
+        const ssKeys = Object.keys(env.sessionStorage || {});
+        ssEl.textContent = ssKeys.length > 0
+          ? ssKeys.map(k => `${k}: ${env.sessionStorage[k]}`).join('\n')
+          : '(empty)';
+      }
+      const cookiesEl = document.getElementById('envCookies');
+      if (cookiesEl) {
+        cookiesEl.textContent = (env.cookieNames || []).join('\n') || '(none)';
+      }
+    }
 
   }); // End storage get
 
