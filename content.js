@@ -48,6 +48,18 @@ function getElementAttributes(el) {
   return attrs + '>';
 }
 
+// Generate CSS selector unik untuk elemen
+function getCssSelector(el) {
+  if (!el || el.nodeType !== 1) return '';
+  if (el.id) return `${el.tagName.toLowerCase()}#${el.id}`;
+  let selector = el.tagName.toLowerCase();
+  if (el.className && typeof el.className === 'string') {
+    const classes = el.className.trim().split(/\s+/).filter(Boolean).slice(0, 3);
+    if (classes.length > 0) selector += '.' + classes.join('.');
+  }
+  return selector;
+}
+
 // Generate XPath for an element
 function getXPath(el) {
   if (!el || el.nodeType !== 1) return '';
@@ -145,6 +157,8 @@ document.addEventListener('click', (e) => {
   
   const elementDesc = getElementAttributes(target);
   const xpath = getXPath(target);
+  const cssSelector = getCssSelector(target);
+  const textContent = (target.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 80);
   
   try {
     chrome.runtime.sendMessage({
@@ -155,7 +169,13 @@ document.addEventListener('click', (e) => {
         event: 'Click',
         element: elementDesc,
         fullHtml: target.outerHTML.substring(0, 1000),
-        xpath: xpath
+        xpath: xpath,
+        cssSelector: cssSelector,
+        textContent: textContent,
+        clientX: Math.round(e.clientX),
+        clientY: Math.round(e.clientY),
+        pageX: Math.round(e.pageX),
+        pageY: Math.round(e.pageY)
       }
     });
   } catch(err) {}

@@ -11,13 +11,39 @@
     }, '*');
   }
 
+  // Circular reference-safe JSON replacer
+  const getCircularReplacer = () => {
+    const seen = new WeakSet();
+    return (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value)) return '[Circular Reference]';
+        seen.add(value);
+      }
+      return value;
+    };
+  };
+
+  // Safely serialize a single value for transport
+  function safeSerialize(a) {
+    if (a === null) return null;
+    if (a === undefined) return undefined;
+    if (typeof a !== 'object' && typeof a !== 'function') return a;
+    try { return JSON.parse(JSON.stringify(a, getCircularReplacer())); }
+    catch(e) { return String(a); }
+  }
+
   // Override Console
   const overrideConsole = (method) => {
     const original = console[method];
     console[method] = function(...args) {
+      const stack = method === 'error' || method === 'warn'
+        ? (new Error().stack || '').split('\n').slice(2).join('\n')
+        : '';
       sendLog('CONSOLE', {
         level: method,
-        message: args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' '),
+        message: args.map(a => typeof a === 'object' ? JSON.stringify(a, getCircularReplacer()) : String(a)).join(' '),
+        args: args.map(safeSerialize),
+        stack: stack,
         time: new Date().toISOString()
       });
       original.apply(console, args);
@@ -25,6 +51,7 @@
   };
 
   ['log', 'info', 'warn', 'error'].forEach(overrideConsole);
+
 
   window.addEventListener('error', (event) => {
     const errorData = {

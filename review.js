@@ -38,6 +38,100 @@ document.addEventListener('DOMContentLoaded', () => {
       return 0;
     }
 
+    // --- JSON TREE RENDERER ---
+    // Fungsi rekursif yang menghasilkan HTML tree seperti DevTools
+    let _jtCounter = 0; // unique ID per node untuk toggle tanpa framework
+    function renderJsonTree(value, depth) {
+      depth = depth || 0;
+      const uid = '_jt' + (++_jtCounter);
+
+      if (value === null) return `<span class="jt-val-null">null</span>`;
+      if (value === undefined) return `<span class="jt-val-undefined">undefined</span>`;
+
+      const type = typeof value;
+      if (type === 'string') {
+        const safe = value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const short = safe.length > 80 ? safe.substring(0, 80) + '…' : safe;
+        return `<span class="jt-val-string">"${short}"</span>`;
+      }
+      if (type === 'number') return `<span class="jt-val-number">${value}</span>`;
+      if (type === 'boolean') return `<span class="jt-val-boolean">${value}</span>`;
+
+      if (Array.isArray(value)) {
+        if (value.length === 0) return `<span class="jt-bracket">[]</span>`;
+        const summary = `Array(${value.length})`;
+        const items = value.slice(0, 50).map((v, i) =>
+          `<span class="jt-node"><span class="jt-key">${i}</span><span class="jt-punct">: </span>${renderJsonTree(v, depth+1)}</span>`
+        ).join('');
+        return `<span class="jt-toggle" data-toggle="json" data-target="${uid}"><span class="jt-caret">▶</span><span class="jt-bracket">[</span><span class="jt-summary">${summary}</span><span class="jt-bracket">]</span></span><span class="jt-children" id="${uid}">${items}${value.length > 50 ? '<span class="jt-val-null">…'+value.length+' items</span>' : ''}</span>`;
+      }
+
+      if (type === 'object') {
+        const keys = Object.keys(value);
+        if (keys.length === 0) return `<span class="jt-bracket">{}</span>`;
+        const summary = `{${keys.slice(0,3).join(', ')}${keys.length > 3 ? ', …' : ''}}`;
+        const items = keys.slice(0, 50).map(k => {
+          const safeK = k.replace(/&/g,'&amp;');
+          return `<span class="jt-node"><span class="jt-key">"${safeK}"</span><span class="jt-punct">: </span>${renderJsonTree(value[k], depth+1)}</span>`;
+        }).join('');
+        return `<span class="jt-toggle" data-toggle="json" data-target="${uid}"><span class="jt-caret">▶</span><span class="jt-bracket">{</span><span class="jt-summary">${summary}</span><span class="jt-bracket">}</span></span><span class="jt-children" id="${uid}">${items}${keys.length > 50 ? '<span class="jt-val-null">…'+keys.length+' keys</span>' : ''}</span>`;
+      }
+
+      return `<span>${String(value)}</span>`;
+    }
+
+    // Render satu console log entry dengan expand/collapse DevTools-style
+    function renderConsoleEntry(item, uid) {
+      const level = item.level || 'log';
+      const t = (item.time || '').match(/\[(\d+:\d+)\]/);
+      const timeStr = t ? t[1] : '0:00';
+      const sec = parseSec(item.time);
+      const hasArgs = item.args && item.args.length > 0;
+      const hasStack = item.stack && item.stack.trim();
+      const isExpandable = hasArgs || hasStack;
+
+      // Short message preview (always visible)
+      const msgShort = (item.message || '').substring(0, 120);
+
+      // Build expanded body: json tree per arg
+      let bodyHtml = '';
+      if (hasArgs) {
+        bodyHtml += `<div class="jt-root">`;
+        bodyHtml += item.args.map((a, i) => {
+          if (a === null || a === undefined || typeof a !== 'object') {
+            return `<div class="jt-node">${renderJsonTree(a)}</div>`;
+          }
+          return `<div class="jt-node">${renderJsonTree(a)}</div>`;
+        }).join('<hr style="border:none;border-top:1px solid #eee;margin:4px 0;">');
+        bodyHtml += `</div>`;
+      } else {
+        // fallback: full message text
+        bodyHtml += `<div style="font-family:monospace;font-size:11px;white-space:pre-wrap;">${(item.message||'').replace(/</g,'&lt;')}</div>`;
+      }
+      if (hasStack) {
+        bodyHtml += `<div class="log-stack-label" style="margin-top:6px;">Stack Trace</div>`;
+        bodyHtml += `<div class="log-stack-trace">${item.stack.replace(/</g,'&lt;')}</div>`;
+      }
+
+      const chevronSection = isExpandable
+        ? `<span class="log-chevron" id="chev_${uid}">▶</span>`
+        : `<span class="log-chevron" style="visibility:hidden;">▶</span>`;
+
+      const headerData = isExpandable
+        ? `data-toggle="console" data-target="${uid}"`
+        : '';
+
+      return `<div class="log-entry-expandable" data-time="${sec}">
+        <div class="log-entry-header" ${headerData}>
+          ${chevronSection}
+          <span class="log-level-badge ${level}">${level}</span>
+          <span class="log-message-short">${msgShort.replace(/</g,'&lt;')}</span>
+          <span class="log-time-badge">${timeStr}</span>
+        </div>
+        ${isExpandable ? `<div class="log-entry-body" id="body_${uid}">${bodyHtml}</div>` : ''}
+      </div>`;
+    }
+
     // --- CONSOLE & UNIFIED LOGIC ---
     let unified = [];
     function rebuildUnified() {
@@ -91,16 +185,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return true;
       });
       
-      const cHtml = filtered.map(item => {
+      const cHtml = filtered.map((item, idx) => {
         const match = (item.time || '').match(/\[(\d+:\d+)\]/);
         const t = match ? match[1] : '0:00';
         const sec = parseSec(item.time);
         
-        let icon = '', content = '', css = '';
+        // Console items: gunakan renderer baru dengan object inspector
         if (item._cat === 'console') {
-          icon = '💬'; css = item.type === 'error' ? 'error' : '';
-          content = `${item.type ? item.type.toUpperCase() : 'LOG'}: ${item.message}`;
-        } else if (item._cat === 'network') {
+          return renderConsoleEntry(item, 'u_' + idx + '_' + sec);
+        }
+        
+        let icon = '', content = '', css = '';
+        if (item._cat === 'network') {
           const isErr = (item.status === 'CACHE_MISS' || (item.status && item.status >= 400));
           icon = '⇄'; css = isErr ? 'error' : 'net';
           content = `<b>${item.method}</b> ${item.url}`;
@@ -121,15 +217,24 @@ document.addEventListener('DOMContentLoaded', () => {
             const tagMatch = rawEl.match(/^<([a-z0-9]+)/i);
             const tagName = tagMatch ? tagMatch[1] : 'element';
             const attrs = rawEl.replace(/^<[a-z0-9]+/i, '').replace(/>$/, '').trim();
-            const cleanFull = (item.fullHtml || item.element || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const xpathLine = item.xpath ? `<div style="font-size:10px;color:#888;margin-top:2px;font-family:monospace;">XPath: ${item.xpath}</div>` : '';
+            
+            // Detail panel HTML
+            const detailUid = 'ud_' + idx + '_' + sec;
+            const detailHtml = `<div class="action-detail-panel" id="dp_${detailUid}">
+              ${item.cssSelector ? `<div class="action-detail-row"><span class="action-detail-label">Selector</span><span class="action-detail-value selector">${item.cssSelector}</span></div>` : ''}
+              ${item.xpath ? `<div class="action-detail-row"><span class="action-detail-label">XPath</span><span class="action-detail-value xpath">${item.xpath}</span></div>` : ''}
+              ${(item.clientX != null) ? `<div class="action-detail-row"><span class="action-detail-label">Viewport (x,y)</span><span class="action-detail-value coord">${item.clientX}, ${item.clientY}</span></div>` : ''}
+              ${(item.pageX != null) ? `<div class="action-detail-row"><span class="action-detail-label">Page (x,y)</span><span class="action-detail-value coord">${item.pageX}, ${item.pageY}</span></div>` : ''}
+              ${item.textContent ? `<div class="action-detail-row"><span class="action-detail-label">Text</span><span class="action-detail-value text">${item.textContent.replace(/</g,'&lt;')}</span></div>` : ''}
+            </div>`;
             
             content = `Clicked <b>&lt;${tagName}</b> 
                       ${attrs ? `<span class="attr-text" style="color:#666; font-family:monospace;">${attrs.substring(0, 50)}${attrs.length > 50 ? '...' : ''}</span>` : ''}
                       <b>&gt;</b>
-                      <span class="collapse-toggle" style="float:right;color:#1a73e8;cursor:pointer;font-size:11px;" onclick="event.stopPropagation(); const pre = this.parentElement.querySelector('pre'); pre.style.display = pre.style.display === 'block' ? 'none' : 'block'; this.innerText = pre.style.display === 'block' ? 'collapse' : 'expand';">expand</span>
+                      <button class="action-expand-btn" data-toggle="action" data-target="${detailUid}">▶ details</button>
                       ${xpathLine}
-                      <pre class="code-block" style="display:none;margin-top:8px;padding:10px;background:#f8f9fa;color:#d93025;border-radius:4px;font-size:11px;overflow-x:auto;border:1px solid #eee;white-space:pre-wrap;">${cleanFull}</pre>`;
+                      ${detailHtml}`;
           } else if (isType) {
             icon = '⌨️';
             css = 'typed';
@@ -353,11 +458,26 @@ document.addEventListener('DOMContentLoaded', () => {
             const cleanFull = (a.fullHtml || a.element || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             const xpathLine = a.xpath ? `<div style="font-size:10px;color:#888;margin-top:2px;font-family:monospace;">XPath: ${a.xpath}</div>` : '';
 
+            // Detail panel dengan koordinat dan CSS selector
+            const detailUid = 'ap_' + Math.random().toString(36).substr(2,6);
+            const detailHtml = `<div class="action-detail-panel" id="dp_${detailUid}">
+              ${a.cssSelector ? `<div class="action-detail-row"><span class="action-detail-label">Selector</span><span class="action-detail-value selector">${a.cssSelector}</span></div>` : ''}
+              ${a.xpath ? `<div class="action-detail-row"><span class="action-detail-label">XPath</span><span class="action-detail-value xpath">${a.xpath}</span></div>` : ''}
+              ${(a.clientX != null) ? `<div class="action-detail-row"><span class="action-detail-label">Viewport (x,y)</span><span class="action-detail-value coord">${a.clientX}, ${a.clientY}</span></div>` : ''}
+              ${(a.pageX != null) ? `<div class="action-detail-row"><span class="action-detail-label">Page (x,y)</span><span class="action-detail-value coord">${a.pageX}, ${a.pageY}</span></div>` : ''}
+              ${a.textContent ? `<div class="action-detail-row"><span class="action-detail-label">Text</span><span class="action-detail-value text">${a.textContent.replace(/</g,'&lt;')}</span></div>` : ''}
+              <div class="action-detail-row" style="margin-top:6px;border-top:1px solid #eee;padding-top:6px;">
+                <span class="action-detail-label">Full HTML</span>
+                <pre style="margin:0;font-size:10px;color:#d93025;white-space:pre-wrap;overflow-x:auto;">${cleanFull}</pre>
+              </div>
+            </div>`;
+
             content = `Clicked <b>&lt;${tagName}</b> 
                       ${attrs ? `<span class="attr-text" style="color:#666; font-family:monospace;">${attrs.substring(0, 50)}${attrs.length > 50 ? '...' : ''}</span>` : ''}
                       <b>&gt;</b>
-                      <span class="collapse-toggle" style="float:right;color:#1a73e8;cursor:pointer;font-size:11px;" onclick="event.stopPropagation(); const pre = this.parentElement.querySelector('pre'); pre.style.display = pre.style.display === 'block' ? 'none' : 'block'; this.innerText = pre.style.display === 'block' ? 'collapse' : 'expand';">expand</span>
-                      <pre class="code-block" style="display:none;margin-top:8px;padding:10px;background:#f8f9fa;color:#d93025;border-radius:4px;font-size:11px;overflow-x:auto;border:1px solid #eee;white-space:pre-wrap;">${cleanFull}</pre>`;
+                      <button class="action-expand-btn" data-toggle="action" data-target="${detailUid}">▶ details</button>
+                      ${xpathLine}
+                      ${detailHtml}`;
         } else if (isInput) {
             icon = '⌨️'; css = 'typed';
             const val = a.value || '***';
@@ -527,6 +647,46 @@ document.addEventListener('DOMContentLoaded', () => {
         cookiesEl.textContent = (env.cookieNames || []).join('\n') || '(none)';
       }
     }
+
+    // --- GLOBAL EVENT DELEGATION (Fix CSP onclick issue) ---
+    document.addEventListener('click', (e) => {
+      // 1. JSON Tree Toggle
+      const jtToggle = e.target.closest('[data-toggle="json"]');
+      if (jtToggle) {
+        e.stopPropagation();
+        const targetId = jtToggle.getAttribute('data-target');
+        const content = document.getElementById(targetId);
+        const caret = jtToggle.querySelector('.jt-caret');
+        if (content) content.classList.toggle('open');
+        if (caret) caret.classList.toggle('open');
+        return;
+      }
+
+      // 2. Console Entry Toggle
+      const consoleToggle = e.target.closest('[data-toggle="console"]');
+      if (consoleToggle) {
+        e.stopPropagation();
+        const targetId = consoleToggle.getAttribute('data-target');
+        const body = document.getElementById('body_' + targetId);
+        const chev = document.getElementById('chev_' + targetId);
+        if (body) body.classList.toggle('open');
+        if (chev) chev.classList.toggle('open');
+        return;
+      }
+
+      // 3. Action Detail Toggle
+      const actionToggle = e.target.closest('[data-toggle="action"]');
+      if (actionToggle) {
+        e.stopPropagation();
+        const targetId = actionToggle.getAttribute('data-target');
+        const detailPanel = document.getElementById('dp_' + targetId);
+        if (detailPanel) {
+          detailPanel.classList.toggle('open');
+          actionToggle.textContent = detailPanel.classList.contains('open') ? '▼ collapse' : '▶ details';
+        }
+        return;
+      }
+    });
 
   }); // End storage get
 
