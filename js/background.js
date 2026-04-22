@@ -236,12 +236,16 @@ async function performAppendLog(type, payload) {
   if (recordingStartTime) {
     const now = Date.now();
     const elapsedMs = payload.startTimeAbs ? (payload.startTimeAbs - recordingStartTime) : (now - recordingStartTime);
-    payload.relativeMs = elapsedMs;
+    payload.relativeMs = Math.max(0, elapsedMs); // Ensure not negative
 
-    const elapsedSecs = Math.floor(elapsedMs / 1000);
+    const elapsedSecs = Math.floor(payload.relativeMs / 1000);
     const m = Math.floor(elapsedSecs / 60).toString().padStart(2, '0');
     const s = (elapsedSecs % 60).toString().padStart(2, '0');
     payload.time = `[${m}:${s}] `;
+  } else {
+    // If recording started but startTime not yet set (during picker)
+    payload.relativeMs = 0;
+    payload.time = `[00:00] `;
   }
   
   if (type === 'CONSOLE') logs.console.push(payload);
@@ -351,9 +355,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 2. Recording Controls
   else if (request.action === 'START_RECORDING') {
     resetLogs().then(() => {
-      // Set start time as early as possible to capture early logs correctly
-      recordingStartTime = Date.now();
       isRecording = true;
+      recordingStartTime = null; // Don't set yet, wait for media stream
       headerCache.clear();
 
       chrome.storage.local.get(['sessionLogs'], (data) => {
@@ -375,16 +378,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       setupOffscreenDocument('html/offscreen.html').then(() => {
         chrome.runtime.sendMessage({ target: 'offscreen', action: 'startRecording' }, (response) => {
           if (response && response.status === 'started') {
-            // Already set isRecording and startTime above
+            recordingStartTime = Date.now(); // Set actual start time now
             
             // Show widget on the active tab
             chrome.tabs.query({active: true, lastFocusedWindow: true}, function(tabs) {
               const targetTab = tabs[0];
               if (targetTab) {
-                const elapsed = recordingStartTime ? Math.floor((Date.now() - recordingStartTime) / 1000) : 0;
                 chrome.tabs.sendMessage(targetTab.id, { 
                   action: 'SHOW_WIDGET', 
-                  startTime: elapsed, 
+                  startTime: 0, 
                   isPaused: isPaused 
                 }).catch(() => {
                   chrome.scripting.executeScript({
@@ -436,7 +438,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   } 
   
   else if (request.action === 'GET_RECORDING_STATE') {
-    sendResponse({ isRecording });
+    sendResponse({ 
+      isRecording, 
+      startTime: recordingStartTime,
+      now: Date.now() 
+    });
   } 
   
   else if (request.action === 'recordingStopped') {

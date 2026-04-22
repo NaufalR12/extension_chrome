@@ -13,6 +13,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnSaveSettings = document.getElementById('btnSaveSettings');
   const inputAutoDelete = document.getElementById('inputAutoDelete');
   const settingsMsg = document.getElementById('settingsMsg');
+  const recordingTimer = document.getElementById('recordingTimer');
+  const statusDot = document.getElementById('statusDot');
+  const userStatus = document.getElementById('userStatus');
+
+  let timerInterval = null;
 
   // Load Settings
   chrome.storage.local.get(['autoDeleteDays'], (res) => {
@@ -56,8 +61,49 @@ document.addEventListener('DOMContentLoaded', () => {
       if (res && res.isRecording) {
         btnRecord.classList.add('hidden');
         btnStop.classList.remove('hidden');
+        
+        if (res.startTime) {
+          startPopupTimer(res.startTime, res.now);
+        } else {
+          // Recording started but picker is active
+          userStatus.textContent = 'Selecting Screen...';
+          statusDot.classList.add('dot-pulse');
+        }
+      } else {
+        stopPopupTimer();
       }
     });
+  }
+
+  function startPopupTimer(startTime, nowTime) {
+    if (timerInterval) clearInterval(timerInterval);
+    
+    recordingTimer.classList.remove('hidden');
+    userStatus.textContent = 'Recording';
+    statusDot.classList.add('dot-pulse');
+
+    const update = () => {
+      const now = Date.now();
+      const offset = nowTime ? (now - nowTime) : 0;
+      const elapsed = Math.floor((now - startTime + offset) / 1000);
+      
+      if (elapsed < 0) return;
+
+      const m = Math.floor(elapsed / 60).toString().padStart(2, '0');
+      const s = (elapsed % 60).toString().padStart(2, '0');
+      recordingTimer.textContent = `${m}:${s}`;
+    };
+
+    update();
+    timerInterval = setInterval(update, 1000);
+  }
+
+  function stopPopupTimer() {
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = null;
+    recordingTimer.classList.add('hidden');
+    userStatus.textContent = 'Ready';
+    statusDot.classList.remove('dot-pulse');
   }
 
   checkAuth();
@@ -87,6 +133,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if(res && res.status === 'started') {
           btnRecord.classList.add('hidden');
           btnStop.classList.remove('hidden');
+          
+          // Refresh state to start timer
+          checkAuth();
         }
       });
     });
