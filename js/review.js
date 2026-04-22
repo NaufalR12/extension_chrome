@@ -305,7 +305,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderNetwork() {
-      const netArr = sessionLogs.network || [];
+      const netArr = (sessionLogs.network || []).slice().sort((a,b) => (a.relativeMs || 0) - (b.relativeMs || 0));
       
       // Calculate total session time for Waterfall scaling
       let maxRelativeMs = 1000; // default min 1s
@@ -499,7 +499,8 @@ document.addEventListener('DOMContentLoaded', () => {
     renderNetwork();
 
     // --- ACTIONS LIST ---
-    const aHtml = (sessionLogs.actions || []).map(a => {
+    const actions = (sessionLogs.actions || []).slice().sort((a,b) => (a.relativeMs || parseSec(a.time)*1000) - (b.relativeMs || parseSec(b.time)*1000));
+    const aHtml = actions.map(a => {
         const match = (a.time || '').match(/\[(\d+:\d+)\]/);
         const t = match ? match[1] : '0:00';
         const sec = parseSec(a.time);
@@ -621,7 +622,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Update Backend Logs
     if (sessionLogs.backend && sessionLogs.backend.length > 0) {
-      const backendLogHtml = sessionLogs.backend.map(s => `
+      const sortedBackend = (sessionLogs.backend || []).slice().sort((a,b) => (a.relativeMs || parseSec(a.time)*1000) - (b.relativeMs || parseSec(b.time)*1000));
+      const backendLogHtml = sortedBackend.map(s => `
         <div class="log-entry error log-jump-target" data-time-ms="${s.relativeMs || (parseSec(s.time) * 1000)}" style="padding:12px; border-bottom:1px solid #eee; cursor:pointer;">
           <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
             <strong style="color:#d93025;"><span class="log-jump-btn">⏯️</span> ${s.type}</strong>
@@ -655,19 +657,23 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${m}:${s}`;
       }
       
-      const listHtml = tl.map((item, idx) => `
-        <div class="url-item ${idx === 0 ? 'active' : ''}" data-time="${item.time}">
-          <div class="url-time">${formatT(item.time)}</div>
-          <a href="${item.url}" target="_blank" class="url-path" title="${item.url}">${item.url}</a>
-        </div>
-      `).join('');
+      const listHtml = tl.map((item, idx) => {
+        const timeMs = item.timeMs || (item.time * 1000);
+        const sec = timeMs / 1000;
+        return `
+          <div class="url-item ${idx === 0 ? 'active' : ''}" data-time="${sec}" data-time-ms="${timeMs}">
+            <div class="url-time">${formatT(sec)}</div>
+            <a href="${item.url}" target="_blank" class="url-path" title="${item.url}">${item.url}</a>
+          </div>
+        `;
+      }).join('');
       
       visitedUrlsList.innerHTML = listHtml || '<div class="log-entry">No URLs recorded</div>';
       
       const urlItems = visitedUrlsList.querySelectorAll('.url-item');
       urlItems.forEach(el => {
         el.addEventListener('click', () => {
-          const t = parseFloat(el.getAttribute('data-time'));
+          const t = parseFloat(el.getAttribute('data-time-ms')) / 1000;
           videoPreview.currentTime = t;
         });
       });

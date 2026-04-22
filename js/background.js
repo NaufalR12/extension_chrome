@@ -210,12 +210,29 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-// Append logs to storage
+// Log processing queue to prevent race conditions
+let logQueue = [];
+let isProcessingQueue = false;
+
 async function appendLog(type, payload) {
+  logQueue.push({ type, payload });
+  processQueue();
+}
+
+async function processQueue() {
+  if (isProcessingQueue) return;
+  isProcessingQueue = true;
+  while (logQueue.length > 0) {
+    const { type, payload } = logQueue.shift();
+    await performAppendLog(type, payload);
+  }
+  isProcessingQueue = false;
+}
+
+async function performAppendLog(type, payload) {
   const data = await chrome.storage.local.get(['sessionLogs']);
   const logs = data.sessionLogs || { console: [], network: [], actions: [], backend: [] };
   
-  // Inject relative video timer
   if (recordingStartTime) {
     const now = Date.now();
     const elapsedMs = payload.startTimeAbs ? (payload.startTimeAbs - recordingStartTime) : (now - recordingStartTime);
@@ -230,22 +247,25 @@ async function appendLog(type, payload) {
   if (type === 'CONSOLE') logs.console.push(payload);
   else if (type === 'ACTIONS') {
     logs.actions.push(payload);
-    // Jika ini adalah navigasi (SPA atau lainnya), tambahkan ke timeline URL agar muncul di tab Info
     if (payload.event && payload.event.includes('Navigated')) {
       if (!logs.info) logs.info = {};
       if (!logs.info.urlTimeline) logs.info.urlTimeline = [];
       
-      const elapsedSecs = payload.relativeMs ? Math.floor(payload.relativeMs / 1000) : 0;
-      // Hindari duplikasi jika URL sama persis dengan yang terakhir dicatat dalam interval waktu singkat
+      const timeMs = payload.relativeMs || 0;
       const lastEntry = logs.info.urlTimeline[logs.info.urlTimeline.length - 1];
-      if (!lastEntry || lastEntry.url !== payload.element || (elapsedSecs - lastEntry.time > 1)) {
-        logs.info.urlTimeline.push({ time: elapsedSecs, url: payload.element });
+      
+      // Record EVERY URL change, even in the same millisecond if the URL is different.
+      // If the URL is the same, only record if it's been at least 100ms (to avoid immediate spam)
+      if (!lastEntry || lastEntry.url !== payload.element || (timeMs - lastEntry.timeMs > 100)) {
+        logs.info.urlTimeline.push({ 
+          time: Math.floor(timeMs / 1000), // Keep seconds for backward compat
+          timeMs: timeMs,                 // Add high-precision time
+          url: payload.element 
+        });
         
-        // Perbarui snapshot cookies untuk URL baru ini
         if (logs.info.environment) {
           chrome.cookies.getAll({ url: payload.element }, (cookies) => {
             if (cookies && cookies.length > 0) {
-              // Kita simpan ke storage secara async
               chrome.storage.local.get(['sessionLogs'], (curr) => {
                 const sLogs = curr.sessionLogs;
                 if (sLogs && sLogs.info && sLogs.info.environment) {
@@ -262,26 +282,20 @@ async function appendLog(type, payload) {
   }
   else if (type === 'BACKEND') logs.backend.push(payload);
   else if (type === 'NETWORK') {
-    // 🧠 SMART MERGING: Jika log ini dari monkey-patch (punya requestBody/responseBody),
-    // coba cari entry webRequest yang sudah ada dan gabungkan.
     if (payload.isMonkeyPatched) {
       const existing = logs.network.find(n => 
         n.url === payload.url && 
-        Math.abs(n.relativeMs - payload.relativeMs) < 2000 // Window 2 detik
+        Math.abs(n.relativeMs - payload.relativeMs) < 2000
       );
       if (existing) {
         existing.requestBody = payload.requestBody;
         existing.responseBody = payload.responseBody;
         if (payload.requestHeaders) existing.requestHeaders = {...existing.requestHeaders, ...payload.requestHeaders};
-        // Jangan push log baru, kita sudah merge
         await chrome.storage.local.set({ sessionLogs: logs });
         return;
       }
     }
-
     logs.network.push(payload);
-    
-    // API Failure Logging
     const status = payload.status;
     if (status && typeof status === 'number' && status >= 400) {
       const traceInfo = payload.traceIds ? Object.entries(payload.traceIds).map(([k,v]) => `${k}: ${v}`).join(' | ') : '';
@@ -296,7 +310,6 @@ async function appendLog(type, payload) {
     }
   }
   
-  // Keep size manageable
   if (logs.console.length > 500) logs.console.shift();
   if (logs.network.length > 500) logs.network.shift();
   if (logs.actions.length > 500) logs.actions.shift();
