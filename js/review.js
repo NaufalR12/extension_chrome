@@ -640,43 +640,129 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // URL Timeline Logic
-    let tl = [];
-    if (sessionLogs.info && sessionLogs.info.urlTimeline) {
-      tl = sessionLogs.info.urlTimeline;
-    } else if (sessionLogs.info && sessionLogs.info.url) {
-      tl = [{ time: 0, url: sessionLogs.info.url }];
-    } else {
-      tl = [{ time: 0, url: '-' }];
-    }
-    
-    const visitedUrlsList = document.getElementById('visitedUrlsList');
-    if (visitedUrlsList) {
-      function formatT(sec) {
-        const m = Math.floor(sec / 60);
-        const s = Math.floor(sec % 60).toString().padStart(2, '0');
-        return `${m}:${s}`;
+    function renderUrlTimeline() {
+      let tl = [];
+      if (sessionLogs.info && sessionLogs.info.urlTimeline) {
+        tl = sessionLogs.info.urlTimeline;
+      } else if (sessionLogs.info && sessionLogs.info.url) {
+        tl = [{ time: 0, url: sessionLogs.info.url }];
+      } else {
+        tl = [{ time: 0, url: '-' }];
       }
       
-      const listHtml = tl.map((item, idx) => {
-        const timeMs = item.timeMs || (item.time * 1000);
-        const sec = timeMs / 1000;
-        return `
-          <div class="url-item ${idx === 0 ? 'active' : ''}" data-time="${sec}" data-time-ms="${timeMs}">
-            <div class="url-time">${formatT(sec)}</div>
-            <a href="${item.url}" target="_blank" class="url-path" title="${item.url}">${item.url}</a>
-          </div>
-        `;
-      }).join('');
-      
-      visitedUrlsList.innerHTML = listHtml || '<div class="log-entry">No URLs recorded</div>';
-      
-      const urlItems = visitedUrlsList.querySelectorAll('.url-item');
-      urlItems.forEach(el => {
-        el.addEventListener('click', () => {
-          const t = parseFloat(el.getAttribute('data-time-ms')) / 1000;
-          videoPreview.currentTime = t;
+      const visitedUrlsList = document.getElementById('visitedUrlsList');
+      if (visitedUrlsList) {
+        function formatT(sec) {
+          const m = Math.floor(sec / 60);
+          const s = Math.floor(sec % 60).toString().padStart(2, '0');
+          return `${m}:${s}`;
+        }
+        
+        const listHtml = tl.map((item, idx) => {
+          // Fix: Ensure 0 is not treated as falsy
+          const timeMs = (item.timeMs !== undefined) ? item.timeMs : (item.time * 1000);
+          const sec = timeMs / 1000;
+          return `
+            <div class="url-item ${idx === 0 ? 'active' : ''}" data-time="${sec}" data-time-ms="${timeMs}">
+              <div class="url-time">${formatT(sec)}</div>
+              <a href="${item.url}" target="_blank" class="url-path" title="${item.url}">${item.url}</a>
+            </div>
+          `;
+        }).join('');
+        
+        visitedUrlsList.innerHTML = listHtml || '<div class="log-entry">No URLs recorded</div>';
+        
+        const urlItems = visitedUrlsList.querySelectorAll('.url-item');
+        urlItems.forEach(el => {
+          el.addEventListener('click', () => {
+            const t = parseFloat(el.getAttribute('data-time-ms')) / 1000;
+            videoPreview.currentTime = t;
+          });
         });
-      });
+      }
+    }
+
+    renderUrlTimeline();
+
+    // Listen for storage changes (for when the background queue is still flushing)
+    chrome.storage.onChanged.addListener((changes) => {
+      if (changes.sessionLogs) {
+        sessionLogs = changes.sessionLogs.newValue;
+        renderUrlTimeline();
+        
+        // Also refresh Actions list as Navigations are also Actions
+        const actions = (sessionLogs.actions || []).slice().sort((a,b) => (a.relativeMs || parseSec(a.time)*1000) - (b.relativeMs || parseSec(b.time)*1000));
+        const aHtml = actions.map(renderActionEntry).join('');
+        const actionLogsContainer = document.getElementById('actionLogs');
+        if (actionLogsContainer) {
+          actionLogsContainer.innerHTML = aHtml || '<div class="u-entry" style="padding:20px; text-align:center; color:#999;">No actions recorded.</div>';
+        }
+
+        // Update counts
+        const actionCount = document.getElementById('countACTIONS');
+        if (actionCount) actionCount.textContent = actions.length;
+      }
+    });
+
+    // Helper for rendering action entry (to avoid duplication)
+    function renderActionEntry(a) {
+        const match = (a.time || '').match(/\[(\d+:\d+)\]/);
+        const t = match ? match[1] : '0:00';
+        const sec = parseSec(a.time);
+        const isNav = a.event && a.event.includes('Navigated');
+        const isClick = a.event && a.event.includes('Click');
+        const isInput = a.event && (a.event.includes('Typed') || a.event.includes('Input') || a.event.includes('Change'));
+        const isScroll = a.event && a.event.includes('Scroll');
+        
+        let icon = '🪄', content = '', css = '';
+        if (isNav) {
+            icon = '🌐'; css = 'nav';
+            const methodTag = a.method ? ` <span style="color:#888;font-size:11px">via ${a.method}</span>` : '';
+            content = `Navigated to <a href="${a.element}" target="_blank" style="color: #1a73e8; text-decoration: none;">${a.element || 'Unknown URL'}</a>${methodTag}`;
+        } else if (isClick) {
+            icon = '🖱️'; css = 'clicked';
+            const rawEl = a.element || '';
+            const tagMatch = rawEl.match(/^<([a-z0-9]+)/i);
+            const tagName = tagMatch ? tagMatch[1] : 'element';
+            const attrs = rawEl.replace(/^<[a-z0-9]+/i, '').replace(/>$/, '').trim();
+            const cleanFull = (a.fullHtml || a.element || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const xpathLine = a.xpath ? `<div style="font-size:10px;color:#888;margin-top:2px;font-family:monospace;">XPath: ${a.xpath}</div>` : '';
+
+            const detailUid = 'ap_' + Math.random().toString(36).substr(2,6);
+            const detailHtml = `<div class="action-detail-panel" id="dp_${detailUid}">
+              ${a.cssSelector ? `<div class="action-detail-row"><span class="action-detail-label">Selector</span><span class="action-detail-value selector">${a.cssSelector}</span></div>` : ''}
+              ${a.xpath ? `<div class="action-detail-row"><span class="action-detail-label">XPath</span><span class="action-detail-value xpath">${a.xpath}</span></div>` : ''}
+              ${(a.clientX != null) ? `<div class="action-detail-row"><span class="action-detail-label">Viewport (x,y)</span><span class="action-detail-value coord">${a.clientX}, ${a.clientY}</span></div>` : ''}
+              ${(a.pageX != null) ? `<div class="action-detail-row"><span class="action-detail-label">Page (x,y)</span><span class="action-detail-value coord">${a.pageX}, ${a.pageY}</span></div>` : ''}
+              ${a.textContent ? `<div class="action-detail-row"><span class="action-detail-label">Text</span><span class="action-detail-value text">${a.textContent.replace(/</g,'&lt;')}</span></div>` : ''}
+              <div class="action-detail-row" style="margin-top:6px;border-top:1px solid #eee;padding-top:6px;">
+                <span class="action-detail-label">Full HTML</span>
+                <pre style="margin:0;font-size:10px;color:#d93025;white-space:pre-wrap;overflow-x:auto;">${cleanFull}</pre>
+              </div>
+            </div>`;
+
+            content = `Clicked <b>&lt;${tagName}</b> 
+                      ${attrs ? `<span class="attr-text" style="color:#666; font-family:monospace;">${attrs.substring(0, 50)}${attrs.length > 50 ? '...' : ''}</span>` : ''}
+                      <b>&gt;</b>
+                      <button class="action-expand-btn" data-toggle="action" data-target="${detailUid}">▶ details</button>
+                      ${xpathLine}
+                      ${detailHtml}`;
+        } else if (isInput) {
+            icon = '⌨️'; css = 'typed';
+            const val = a.value || '***';
+            content = `Typed <b style="background:#f0f0f0;padding:2px 4px;border-radius:4px;font-family:monospace;font-weight:normal;border:1px solid #ddd;">${val}</b>`;
+        } else if (isScroll) {
+            icon = '📜'; css = '';
+            content = `<span style="color:#5f6368;">Scrolled</span> <b style="background:#f0f0f0;padding:2px 4px;border-radius:4px;font-family:monospace;font-weight:normal;border:1px solid #ddd;">${a.value || '?'}</b>`;
+        } else {
+            content = `<strong>${a.event}</strong><br><small>${a.element}</small>`;
+        }
+
+        return `<div class="u-entry ${css} log-jump-target" data-time="${sec}" data-time-ms="${a.relativeMs || (sec * 1000)}" style="cursor:pointer">
+          <div class="u-time">${t} <span class="log-jump-btn" style="display:block;margin-top:4px;">⏯️</span></div>
+          <div class="u-icon">${icon}</div>
+          <div class="u-cont">${content}</div>
+        </div>`;
     }
 
     // Populate Environment Info

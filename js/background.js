@@ -247,36 +247,27 @@ async function performAppendLog(type, payload) {
   if (type === 'CONSOLE') logs.console.push(payload);
   else if (type === 'ACTIONS') {
     logs.actions.push(payload);
+    
+    // 🧭 URL TIMELINE TRACKING
     if (payload.event && payload.event.includes('Navigated')) {
+      const timeMs = payload.relativeMs || 0;
       if (!logs.info) logs.info = {};
       if (!logs.info.urlTimeline) logs.info.urlTimeline = [];
       
-      const timeMs = payload.relativeMs || 0;
       const lastEntry = logs.info.urlTimeline[logs.info.urlTimeline.length - 1];
+      const currentUrl = payload.element;
       
-      // Record EVERY URL change, even in the same millisecond if the URL is different.
-      // If the URL is the same, only record if it's been at least 100ms (to avoid immediate spam)
-      if (!lastEntry || lastEntry.url !== payload.element || (timeMs - lastEntry.timeMs > 100)) {
+      // Allow if it's the first entry, or the URL is different, 
+      // or it's been more than 500ms (to catch refreshes/redirects)
+      if (!lastEntry || lastEntry.url !== currentUrl || (timeMs - (lastEntry.timeMs || 0) > 500)) {
         logs.info.urlTimeline.push({ 
-          time: Math.floor(timeMs / 1000), // Keep seconds for backward compat
-          timeMs: timeMs,                 // Add high-precision time
-          url: payload.element 
+          time: Math.floor(timeMs / 1000), 
+          timeMs: timeMs,                 
+          url: currentUrl 
         });
         
-        if (logs.info.environment) {
-          chrome.cookies.getAll({ url: payload.element }, (cookies) => {
-            if (cookies && cookies.length > 0) {
-              chrome.storage.local.get(['sessionLogs'], (curr) => {
-                const sLogs = curr.sessionLogs;
-                if (sLogs && sLogs.info && sLogs.info.environment) {
-                  sLogs.info.environment.cookies = cookies;
-                  sLogs.info.environment.cookieCount = cookies.length;
-                  chrome.storage.local.set({ sessionLogs: sLogs });
-                }
-              });
-            }
-          });
-        }
+        // Update current URL in info
+        logs.info.url = currentUrl;
       }
     }
   }
@@ -360,25 +351,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 2. Recording Controls
   else if (request.action === 'START_RECORDING') {
     resetLogs().then(() => {
+      // Set start time as early as possible to capture early logs correctly
+      recordingStartTime = Date.now();
+      isRecording = true;
+      headerCache.clear();
+
       chrome.storage.local.get(['sessionLogs'], (data) => {
         const logs = data.sessionLogs || {};
-        logs.info = { 
-          url: request.payloadUrl || 'N/A',
-          location: cachedCountry || 'Unknown',
-          timestamp: new Date().toLocaleString(),
-          urlTimeline: [{ time: 0, url: request.payloadUrl || 'N/A' }]
-        };
+        if (!logs.info) logs.info = {};
+        
+        // Preserve any info already recorded (like early navigations)
+        logs.info.url = logs.info.url || request.payloadUrl || 'N/A';
+        logs.info.location = cachedCountry || 'Unknown';
+        logs.info.timestamp = new Date().toLocaleString();
+        
+        if (!logs.info.urlTimeline || logs.info.urlTimeline.length === 0) {
+          logs.info.urlTimeline = [{ time: 0, timeMs: 0, url: logs.info.url }];
+        }
+        
         chrome.storage.local.set({ sessionLogs: logs });
       });
       
       setupOffscreenDocument('html/offscreen.html').then(() => {
         chrome.runtime.sendMessage({ target: 'offscreen', action: 'startRecording' }, (response) => {
           if (response && response.status === 'started') {
-            isRecording = true;
-            recordingStartTime = Date.now();
-            headerCache.clear();
+            // Already set isRecording and startTime above
             
-            // Show widget on the active tab of the last focused window
+            // Show widget on the active tab
             chrome.tabs.query({active: true, lastFocusedWindow: true}, function(tabs) {
               const targetTab = tabs[0];
               if (targetTab) {
@@ -514,7 +513,16 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 async function commitUpload(title, desc, videoBase64, infoData) {
   const data = await chrome.storage.local.get(['sessionLogs']);
-  const logsData = data.sessionLogs || {};
+  let logsData = data.sessionLogs || {};
+  
+  // Wait for log queue to flush if it's still processing
+  let retries = 0;
+  while (isProcessingQueue && retries < 10) {
+    await new Promise(r => setTimeout(r, 100));
+    const latest = await chrome.storage.local.get(['sessionLogs']);
+    logsData = latest.sessionLogs || logsData;
+    retries++;
+  }
   
   // Ambil data info yang sudah ada (termasuk environment snapshot dan URL asli)
   const existingInfo = logsData.info || {};
