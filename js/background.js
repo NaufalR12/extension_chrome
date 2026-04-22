@@ -472,17 +472,29 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   const data = await chrome.storage.local.get(['sessionLogs']);
   const logsData = data.sessionLogs || {};
   
-  // Preserve urlTimeline if exists
-  if (logsData.info && logsData.info.urlTimeline) {
-    infoData.urlTimeline = logsData.info.urlTimeline;
+  // Ambil data info yang sudah ada (termasuk environment snapshot dari content.js)
+  const existingInfo = logsData.info || {};
+  
+  // Gabungkan dengan infoData dari review.js (metadata visual)
+  const finalInfo = {
+    ...existingInfo,
+    ...(infoData || {})
+  };
+
+  // Tambahkan cookies lengkap ke environment jika memungkinkan
+  if (finalInfo.environment && finalInfo.url && finalInfo.url !== '-') {
+    try {
+      const cookies = await new Promise(resolve => {
+        chrome.cookies.getAll({ url: finalInfo.url }, resolve);
+      });
+      if (cookies && cookies.length > 0) {
+        finalInfo.environment.cookies = cookies;
+        finalInfo.environment.cookieCount = cookies.length;
+      }
+    } catch (e) { console.error("Failed to fetch full cookies for upload:", e); }
   }
 
-  logsData.info = infoData || {
-    browser: "Unknown",
-    os: "Unknown",
-    resolution: "-",
-    url: "-"
-  };
+  logsData.info = finalInfo;
 
   const token = await new Promise((resolve, reject) => {
     chrome.identity.getAuthToken({interactive: true}, (token) => {
