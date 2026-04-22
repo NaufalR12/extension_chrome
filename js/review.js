@@ -159,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
         (sessionLogs.console || []).forEach(l => unified.push({...l, _cat: 'console'}));
         (sessionLogs.network || []).forEach(n => unified.push({...n, _cat: 'network'}));
         (sessionLogs.actions || []).forEach(a => unified.push({...a, _cat: 'action'}));
-        unified.sort((a,b) => parseSec(a.time) - parseSec(b.time));
+        unified.sort((a,b) => (a.relativeMs || parseSec(a.time)*1000) - (b.relativeMs || parseSec(b.time)*1000));
     }
 
     let uSearch = '';

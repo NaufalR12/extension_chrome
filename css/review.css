@@ -1149,6 +1149,12 @@ tr.log-jump-target.log-entry-active td {
   border-radius: 8px;
 }
 
+.network-table-container {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
 .log-toolbar {
   padding: 12px;
   background: #f8f9fa;
