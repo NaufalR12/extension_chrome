@@ -23,23 +23,23 @@
     "https://api.country.is/*"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "js/background.js",
     "type": "module"
   },
   "action": {
-    "default_popup": "popup.html",
+    "default_popup": "html/popup.html",
     "default_title": "Open Bug Reporter"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["content.js"],
+      "js": ["js/content.js"],
       "run_at": "document_start"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["injected.js"],
+      "resources": ["js/injected.js"],
       "matches": ["<all_urls>"]
     }
   ],

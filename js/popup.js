@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Dashboard Button
   btnDashboard.addEventListener('click', () => {
-    chrome.tabs.create({ url: chrome.runtime.getURL('home.html') });
+    chrome.tabs.create({ url: chrome.runtime.getURL('html/home.html') });
   });
 
   // Screenshot Button (Placeholder)

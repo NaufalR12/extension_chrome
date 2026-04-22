@@ -327,7 +327,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         chrome.storage.local.set({ sessionLogs: logs });
       });
       
-      setupOffscreenDocument('offscreen.html').then(() => {
+      setupOffscreenDocument('html/offscreen.html').then(() => {
         chrome.runtime.sendMessage({ target: 'offscreen', action: 'startRecording' }, (response) => {
           if (response && response.status === 'started') {
             isRecording = true;
@@ -346,7 +346,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }).catch(() => {
                   chrome.scripting.executeScript({
                     target: { tabId: targetTab.id },
-                    files: ['content.js']
+                    files: ['js/content.js']
                   }, () => {
                     if (!chrome.runtime.lastError) {
                       chrome.tabs.sendMessage(targetTab.id, { 
@@ -398,7 +398,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   else if (request.action === 'recordingStopped') {
     pendingVideoBase64 = request.base64data;
-    chrome.tabs.create({ url: chrome.runtime.getURL('review.html') });
+    chrome.tabs.create({ url: chrome.runtime.getURL('html/review.html') });
     chrome.offscreen.closeDocument();
   }
 

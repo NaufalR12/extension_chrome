@@ -1,6 +1,6 @@
 // Inject script into main world
 const script = document.createElement('script');
-script.src = chrome.runtime.getURL('injected.js');
+script.src = chrome.runtime.getURL('js/injected.js');
 script.onload = function() {
     this.remove();
 };
