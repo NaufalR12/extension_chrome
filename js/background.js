@@ -228,7 +228,38 @@ async function appendLog(type, payload) {
   }
   
   if (type === 'CONSOLE') logs.console.push(payload);
-  else if (type === 'ACTIONS') logs.actions.push(payload);
+  else if (type === 'ACTIONS') {
+    logs.actions.push(payload);
+    // Jika ini adalah navigasi (SPA atau lainnya), tambahkan ke timeline URL agar muncul di tab Info
+    if (payload.event && payload.event.includes('Navigated')) {
+      if (!logs.info) logs.info = {};
+      if (!logs.info.urlTimeline) logs.info.urlTimeline = [];
+      
+      const elapsedSecs = payload.relativeMs ? Math.floor(payload.relativeMs / 1000) : 0;
+      // Hindari duplikasi jika URL sama persis dengan yang terakhir dicatat dalam interval waktu singkat
+      const lastEntry = logs.info.urlTimeline[logs.info.urlTimeline.length - 1];
+      if (!lastEntry || lastEntry.url !== payload.element || (elapsedSecs - lastEntry.time > 1)) {
+        logs.info.urlTimeline.push({ time: elapsedSecs, url: payload.element });
+        
+        // Perbarui snapshot cookies untuk URL baru ini
+        if (logs.info.environment) {
+          chrome.cookies.getAll({ url: payload.element }, (cookies) => {
+            if (cookies && cookies.length > 0) {
+              // Kita simpan ke storage secara async
+              chrome.storage.local.get(['sessionLogs'], (curr) => {
+                const sLogs = curr.sessionLogs;
+                if (sLogs && sLogs.info && sLogs.info.environment) {
+                  sLogs.info.environment.cookies = cookies;
+                  sLogs.info.environment.cookieCount = cookies.length;
+                  chrome.storage.local.set({ sessionLogs: sLogs });
+                }
+              });
+            }
+          });
+        }
+      }
+    }
+  }
   else if (type === 'BACKEND') logs.backend.push(payload);
   else if (type === 'NETWORK') {
     // 🧠 SMART MERGING: Jika log ini dari monkey-patch (punya requestBody/responseBody),
@@ -416,16 +447,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // --- APP STATE REPORTING (Cookies) ---
   else if (request.action === 'BUGLENS_GET_COOKIES') {
-    const cookieOptions = {};
-    if (request.url) {
-      cookieOptions.url = request.url;
-    } else if (sender.tab && sender.tab.url) {
-      cookieOptions.url = sender.tab.url;
-    }
+    const fetchCookies = (url) => {
+      chrome.cookies.getAll(url ? { url } : {}, (cookies) => {
+        sendResponse({ cookies: cookies || [] });
+      });
+    };
 
-    chrome.cookies.getAll(cookieOptions, (cookies) => {
-      sendResponse({ cookies: cookies || [] });
-    });
+    if (request.url && request.url !== 'N/A' && request.url.startsWith('http')) {
+      fetchCookies(request.url);
+    } else {
+      // Fallback: try active tab
+      chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
+        if (tabs[0] && tabs[0].url && tabs[0].url.startsWith('http')) {
+          fetchCookies(tabs[0].url);
+        } else {
+          fetchCookies(null); // Get all if possible (might be limited by permissions)
+        }
+      });
+    }
     return true; // async
   }
 });
@@ -451,14 +490,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       element: tab.url
     });
 
-    chrome.storage.local.get(['sessionLogs'], (data) => {
-      if (data.sessionLogs && data.sessionLogs.info && data.sessionLogs.info.urlTimeline) {
-        const elapsedSecs = recordingStartTime ? Math.floor((Date.now() - recordingStartTime) / 1000) : 0;
-        data.sessionLogs.info.urlTimeline.push({ time: elapsedSecs, url: tab.url });
-        chrome.storage.local.set({ sessionLogs: data.sessionLogs });
-      }
-    });
-
     const elapsed = recordingStartTime ? Math.floor((Date.now() - recordingStartTime) / 1000) : 0;
     chrome.tabs.sendMessage(tabId, { 
       action: 'SHOW_WIDGET', 
@@ -472,14 +503,19 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   const data = await chrome.storage.local.get(['sessionLogs']);
   const logsData = data.sessionLogs || {};
   
-  // Ambil data info yang sudah ada (termasuk environment snapshot dari content.js)
+  // Ambil data info yang sudah ada (termasuk environment snapshot dan URL asli)
   const existingInfo = logsData.info || {};
   
   // Gabungkan dengan infoData dari review.js (metadata visual)
+  // Jangan biarkan 'url: "-"' menimpa URL asli yang sudah terekam
   const finalInfo = {
     ...existingInfo,
     ...(infoData || {})
   };
+
+  if ((!finalInfo.url || finalInfo.url === '-') && existingInfo.url && existingInfo.url !== '-') {
+    finalInfo.url = existingInfo.url;
+  }
 
   // Tambahkan cookies lengkap ke environment jika memungkinkan
   if (finalInfo.environment && finalInfo.url && finalInfo.url !== '-') {
@@ -529,7 +565,7 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   await makeFilePublic(token, jsonFileId); // Make JSON public as well to be read by Player
 
   resetLogs();
-  self.pendingVideoBase64 = null; // Free up
+  pendingVideoBase64 = null; // Free up
   
   // Return Hosted Player Web App URL (Netlify Public Link)
   return `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoFileId}&l=${jsonFileId}`;

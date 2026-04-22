@@ -699,20 +699,27 @@ document.addEventListener('DOMContentLoaded', () => {
       let currentSS = env.sessionStorage || {};
       let currentCK = []; // Will fetch from BG or logs
 
-      // 1. Initial Render
+      // 1. Initial Render (Storage & Cookies)
       renderEnvTable('LS', currentLS);
       renderEnvTable('SS', currentSS);
 
-      // Fetch cookies from background if available, else use logs
-      chrome.runtime.sendMessage({ 
-        action: 'BUGLENS_GET_COOKIES', 
-        url: sessionLogs.info?.url 
-      }, (res) => {
-        if (res && res.cookies) {
-          currentCK = res.cookies;
-          renderEnvTable('CK', currentCK);
-        }
-      });
+      // Prioritas: Gunakan cookies dari snapshot log jika ada (lengkap), 
+      // jika tidak (atau jika ingin data terbaru), ambil dari background.
+      if (env.cookies && env.cookies.length > 0) {
+        currentCK = env.cookies;
+        renderEnvTable('CK', currentCK);
+      } else {
+        const targetUrl = sessionLogs.info?.url !== 'N/A' ? sessionLogs.info?.url : null;
+        chrome.runtime.sendMessage({ 
+          action: 'BUGLENS_GET_COOKIES', 
+          url: targetUrl 
+        }, (res) => {
+          if (res && res.cookies) {
+            currentCK = res.cookies;
+            renderEnvTable('CK', currentCK);
+          }
+        });
+      }
 
       // 2. Toggles
       document.querySelectorAll('[data-toggle-env]').forEach(h => {
