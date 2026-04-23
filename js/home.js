@@ -21,6 +21,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const trashTable = document.getElementById('trashTable');
   const trashListBody = document.getElementById('trashListBody');
 
+  // Settings Elements
+  const userNameDisplay = document.getElementById('userNameDisplay');
+  const userEmailDisplay = document.getElementById('userEmailDisplay');
+  const userPhoto = document.getElementById('userPhoto');
+  const storageText = document.getElementById('storageText');
+  const storageBarFill = document.getElementById('storageBarFill');
+  const autoDeleteEnabled = document.getElementById('autoDeleteEnabled');
+  const autoDeleteConfig = document.getElementById('autoDeleteConfig');
+  const autoDeleteDays = document.getElementById('autoDeleteDays');
+  const btnSaveSettings = document.getElementById('btnSaveSettings');
+
   // Modals
   const editModal = document.getElementById('editModal');
   const deleteModal = document.getElementById('deleteModal');
@@ -39,7 +50,11 @@ document.addEventListener('DOMContentLoaded', () => {
     switchTab(navTrash, viewTrash);
     loadTrash();
   });
-  navSettings.addEventListener('click', () => switchTab(navSettings, viewSettings));
+  navSettings.addEventListener('click', () => {
+    switchTab(navSettings, viewSettings);
+    loadAccountInfo();
+    loadAutoDeleteSettings();
+  });
 
   function switchTab(navEl, viewEl) {
     document.querySelectorAll('.nav-menu li').forEach(el => el.classList.remove('active'));
@@ -60,12 +75,17 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       authToken = token;
       
-      // Get user email
-      fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      // Get user email & full info
+      fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
         headers: { Authorization: `Bearer ${token}` }
       }).then(r => r.json()).then(data => {
-        userEmail = data.email;
-        userEmailSpan.textContent = userEmail;
+        if (data.user) {
+            userEmail = data.user.emailAddress;
+            userEmailSpan.textContent = userEmail;
+            
+            // Also update settings page if open
+            updateSettingsUI(data);
+        }
       });
 
       loadBugs();
@@ -441,5 +461,83 @@ document.addEventListener('DOMContentLoaded', () => {
         alert("Logout error: " + err);
       });
   };
+
+  // --- SETTINGS LOGIC ---
+  function updateSettingsUI(data) {
+    if (!data.user) return;
+    userNameDisplay.textContent = data.user.displayName;
+    userEmailDisplay.textContent = data.user.emailAddress;
+    if (data.user.photoLink) {
+      userPhoto.style.backgroundImage = `url(${data.user.photoLink})`;
+    }
+
+    if (data.storageQuota) {
+      const used = parseInt(data.storageQuota.usage);
+      const limit = parseInt(data.storageQuota.limit);
+      const pct = (used / limit * 100).toFixed(1);
+      
+      storageText.textContent = `${formatSize(used)} / ${formatSize(limit)} (${pct}%)`;
+      storageBarFill.style.width = pct + '%';
+      
+      if (pct > 90) storageBarFill.style.backgroundColor = '#d93025';
+      else if (pct > 70) storageBarFill.style.backgroundColor = '#f29900';
+    }
+  }
+
+  async function loadAccountInfo() {
+    if (!authToken) return;
+    try {
+      const res = await fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      updateSettingsUI(data);
+    } catch (e) { console.error("Failed to load account info:", e); }
+  }
+
+  function loadAutoDeleteSettings() {
+    chrome.storage.local.get(['autoDeleteEnabled', 'autoDeleteDays'], (res) => {
+      autoDeleteEnabled.checked = res.autoDeleteEnabled || false;
+      autoDeleteDays.value = res.autoDeleteDays || 7;
+      toggleAutoDeleteUI();
+    });
+  }
+
+  function toggleAutoDeleteUI() {
+    if (autoDeleteEnabled.checked) {
+      autoDeleteConfig.classList.remove('hidden');
+    } else {
+      autoDeleteConfig.classList.add('hidden');
+    }
+  }
+
+  autoDeleteEnabled.addEventListener('change', toggleAutoDeleteUI);
+
+  btnSaveSettings.onclick = () => {
+    const enabled = autoDeleteEnabled.checked;
+    const days = parseInt(autoDeleteDays.value);
+
+    chrome.storage.local.set({
+      autoDeleteEnabled: enabled,
+      autoDeleteDays: days
+    }, () => {
+      // Sync alarm
+      chrome.runtime.sendMessage({ action: 'SYNC_AUTO_DELETE_ALARM' });
+      
+      const originalText = btnSaveSettings.textContent;
+      btnSaveSettings.textContent = "Saved!";
+      setTimeout(() => {
+        btnSaveSettings.textContent = originalText;
+      }, 2000);
+    });
+  };
+
+  function formatSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  }
 
 });

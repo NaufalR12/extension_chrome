@@ -80,10 +80,59 @@
       <div class="view-header">
         <h1>Settings</h1>
       </div>
-      <div class="settings-card">
-        <h3>Account Management</h3>
-        <p>You are currently authenticated and connected to Google Drive.</p>
-        <button id="btnLogout" class="btn danger">Logout & Revoke Access</button>
+
+      <div class="settings-container">
+        <!-- Account Card -->
+        <div class="settings-card">
+          <div class="settings-section-header">
+            <span class="icon">👤</span> Account Information
+          </div>
+          <div class="account-details">
+            <div id="userPhoto" class="user-avatar-large"></div>
+            <div class="user-info-text">
+              <h3 id="userNameDisplay">Loading...</h3>
+              <p id="userEmailDisplay">Loading...</p>
+            </div>
+          </div>
+          
+          <div class="storage-section">
+            <div class="storage-header">
+              <span>Google Drive Storage</span>
+              <span id="storageText">Calculating...</span>
+            </div>
+            <div class="storage-bar-bg">
+              <div id="storageBarFill" class="storage-bar-fill" style="width: 0%"></div>
+            </div>
+          </div>
+          
+          <button id="btnLogout" class="btn danger mt-3">Logout & Revoke Access</button>
+        </div>
+
+        <!-- Auto-Delete Card -->
+        <div class="settings-card mt-3">
+          <div class="settings-section-header">
+            <span class="icon">🗑️</span> Auto-Delete Trash
+          </div>
+          <p class="settings-hint">Automatically delete items in the trash permanently after a certain period.</p>
+          
+          <div class="form-group flex-row">
+            <label for="autoDeleteEnabled">Enable Auto-Delete</label>
+            <label class="switch">
+              <input type="checkbox" id="autoDeleteEnabled">
+              <span class="slider round"></span>
+            </label>
+          </div>
+
+          <div id="autoDeleteConfig" class="form-group mt-2 hidden">
+            <label for="autoDeleteDays">Delete after (days):</label>
+            <div class="flex-row" style="gap: 10px;">
+              <input type="number" id="autoDeleteDays" min="1" max="90" value="7" style="width: 80px;">
+              <span>Days</span>
+            </div>
+          </div>
+          
+          <button id="btnSaveSettings" class="btn primary mt-3">Save Settings</button>
+        </div>
       </div>
     </div>
 
