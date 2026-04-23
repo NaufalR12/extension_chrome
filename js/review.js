@@ -1152,23 +1152,64 @@ document.addEventListener('DOMContentLoaded', () => {
     if (isExistingReport) {
       // --- UPDATE EXISTING REPORT ---
       try {
-        // 1. Fetch current JSON to update its fields
-        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${existingJsonId}?alt=media`, {
+        const videoId = urlParams.get('v');
+        
+        // 1. Fetch current JSON metadata & content
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${existingJsonId}?fields=name,id&alt=media`, {
           headers: { Authorization: `Bearer ${authToken}` }
         });
         const fullData = await res.json();
         
+        // Also fetch name specifically (media download doesn't give metadata)
+        const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${existingJsonId}?fields=name`, {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+        const meta = await metaRes.json();
+        const currentName = meta.name || ""; // e.g. Trace_OldTitle_2026-04-23T12-00-00-000Z.json
+        
+        // Extract timestamp from old name
+        const parts = currentName.split('_');
+        const timeStampPart = parts.length >= 3 ? parts[parts.length - 1].split('.')[0] : new Date().toISOString().replace(/[:.]/g, '-');
+        
+        // Prepare new sanitized names
+        const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, '_');
+        const newJsonName = `Trace_${sanitizedTitle}_${timeStampPart}.json`;
+        const newVideoName = `Trace_${sanitizedTitle}_${timeStampPart}.webm`;
+
+        // 2. Update JSON content
         fullData.title = title;
         fullData.description = desc;
         if (fullData.metadata) fullData.metadata.lastUpdated = new Date().toISOString();
 
-        // 2. Upload PATCH
         const blob = new Blob([JSON.stringify(fullData, null, 2)], { type: 'application/json' });
         await fetch(`https://www.googleapis.com/upload/drive/v3/files/${existingJsonId}?uploadType=media`, {
           method: 'PATCH',
           headers: { Authorization: `Bearer ${authToken}` },
           body: blob
         });
+
+        // 3. Update File Names (Metadata PATCH)
+        // JSON Name
+        await fetch(`https://www.googleapis.com/drive/v3/files/${existingJsonId}`, {
+          method: 'PATCH',
+          headers: { 
+            Authorization: `Bearer ${authToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ name: newJsonName })
+        });
+
+        // Video Name
+        if (videoId) {
+          await fetch(`https://www.googleapis.com/drive/v3/files/${videoId}`, {
+            method: 'PATCH',
+            headers: { 
+              Authorization: `Bearer ${authToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ name: newVideoName })
+          });
+        }
 
         loading.classList.add('hidden');
         btnSave.disabled = false;
@@ -1179,7 +1220,6 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelector('#stepSuccess h2').textContent = "Successfully Updated!";
         
         // Use the Netlify player URL for the share link
-        const videoId = urlParams.get('v');
         shareLink.value = `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoId}&l=${existingJsonId}`;
         
       } catch (err) {
