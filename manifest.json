@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Bug Reporting & Replay QATool",
+  "name": "T.R.A.C.E",
   "version": "1.0.0",
-  "description": "Alat perekam bug dengan integrasi Google Drive dan Monday.com",
+  "description": "Tracking & Reporting for Application Crash & Errors",
   "permissions": [
     "storage",
     "identity",
@@ -28,7 +28,7 @@
   },
   "action": {
     "default_popup": "html/popup.html",
-    "default_title": "Open Bug Reporter"
+    "default_title": "Open T.R.A.C.E"
   },
   "content_scripts": [
     {

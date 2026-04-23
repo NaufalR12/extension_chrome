@@ -67,13 +67,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       // 1. Get Folder ID
-      const query = "name='BugReports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
+      const query = "name='TRACE_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
       let res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`, {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       let json = await res.json();
       if (!json.files || json.files.length === 0) {
-        showError("Folder BugReports_App not found. Have you recorded any bugs yet?");
+        showError("Folder TRACE_Reports_App not found. Have you recorded any reports yet?");
         return;
       }
       const folderId = json.files[0].id;
@@ -113,7 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
         .sort((a,b) => b.date - a.date);
 
       if (bugsArray.length === 0) {
-        showError("No complete bug records found.");
+        showError("No complete records found.");
         return;
       }
 
@@ -229,8 +229,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // 2. Rename Files to match new title format (Bug_Title_Timestamp.*)
       const sanitizedTitle = newTitle.replace(/[^a-zA-Z0-9]/g, '_');
-      const newVideoName = `Bug_${sanitizedTitle}_${bug.id}.webm`;
-      const newJsonName = `Bug_${sanitizedTitle}_${bug.id}.json`;
+      const newVideoName = `Trace_${sanitizedTitle}_${bug.id}.webm`;
+      const newJsonName = `Trace_${sanitizedTitle}_${bug.id}.json`;
 
       await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
         method: 'PATCH',

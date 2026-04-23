@@ -325,7 +325,7 @@ async function setupOffscreenDocument(path) {
   await chrome.offscreen.createDocument({
     url: path,
     reasons: ['USER_MEDIA'],
-    justification: 'Recording screen for bug report'
+    justification: 'Recording screen for T.R.A.C.E report'
   });
 }
 
@@ -568,7 +568,7 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   
   if (!token) throw new Error("Could not authenticate with Google");
 
-  const folderId = await getOrCreateFolder(token, 'BugReports_App');
+  const folderId = await getOrCreateFolder(token, 'TRACE_Reports_App');
 
   const jsonBlob = new Blob([JSON.stringify({
     version: "1.0",
@@ -585,8 +585,8 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
   const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, '_');
   
-  const videoFileId = await uploadFileToDrive(token, `Bug_${sanitizedTitle}_${timeStamp}.webm`, 'video/webm', videoBlob, folderId);
-  const jsonFileId = await uploadFileToDrive(token, `Bug_${sanitizedTitle}_${timeStamp}.json`, 'application/json', jsonBlob, folderId);
+  const videoFileId = await uploadFileToDrive(token, `Trace_${sanitizedTitle}_${timeStamp}.webm`, 'video/webm', videoBlob, folderId);
+  const jsonFileId = await uploadFileToDrive(token, `Trace_${sanitizedTitle}_${timeStamp}.json`, 'application/json', jsonBlob, folderId);
 
   await makeFilePublic(token, videoFileId);
   await makeFilePublic(token, jsonFileId); // Make JSON public as well to be read by Player
