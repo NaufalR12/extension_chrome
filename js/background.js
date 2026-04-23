@@ -591,6 +591,9 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   await makeFilePublic(token, videoFileId);
   await makeFilePublic(token, jsonFileId); // Make JSON public as well to be read by Player
 
+  // Give Google a moment to propagate permissions
+  await new Promise(r => setTimeout(r, 1000));
+
   resetLogs();
   pendingVideoBase64 = null; // Free up
   
@@ -643,7 +646,15 @@ async function uploadFileToDrive(token, filename, mimeType, fileBlob, folderId) 
     },
     body: form
   });
+  
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("Upload failed:", errText);
+    throw new Error(`Google Drive upload failed: ${res.status} ${errText}`);
+  }
+  
   const json = await res.json();
+  if (!json.id) throw new Error("Upload succeeded but no File ID was returned");
   return json.id; // File ID
 }
 
