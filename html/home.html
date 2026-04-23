@@ -12,6 +12,7 @@
     </div>
     <ul class="nav-menu">
       <li class="active" id="navMyBugs">My Reports</li>
+      <li id="navTrash">Trash</li>
       <li id="navSettings">Settings</li>
     </ul>
     <div class="sidebar-footer">
@@ -49,8 +50,33 @@
       </table>
     </div>
 
+    <!-- TRASH VIEW -->
+    <div id="viewTrash" class="view-panel">
+      <div class="view-header">
+        <h1>Trash</h1>
+        <button id="btnRefreshTrash" class="btn secondary">Refresh Trash</button>
+      </div>
+
+      <div id="loadingTrash" class="loading hidden">Loading trashed files...</div>
+      <div id="errorMsgTrash" class="error hidden"></div>
+
+      <table class="bug-table hidden" id="trashTable">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Date</th>
+            <th>Assets</th>
+            <th class="actions">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="trashListBody">
+          <!-- Trashed rows will be populated here -->
+        </tbody>
+      </table>
+    </div>
+
     <!-- SETTINGS VIEW -->
-    <div id="viewSettings" class="view-panel hidden">
+    <div id="viewSettings" class="view-panel">
       <div class="view-header">
         <h1>Settings</h1>
       </div>

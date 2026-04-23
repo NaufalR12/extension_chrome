@@ -1,17 +1,25 @@
 document.addEventListener('DOMContentLoaded', () => {
   const navMyBugs = document.getElementById('navMyBugs');
+  const navTrash = document.getElementById('navTrash');
   const navSettings = document.getElementById('navSettings');
   const viewMyBugs = document.getElementById('viewMyBugs');
+  const viewTrash = document.getElementById('viewTrash');
   const viewSettings = document.getElementById('viewSettings');
   const userEmailSpan = document.getElementById('userEmail');
   
   const btnRefresh = document.getElementById('btnRefresh');
+  const btnRefreshTrash = document.getElementById('btnRefreshTrash');
   const btnLogout = document.getElementById('btnLogout');
   
   const loading = document.getElementById('loading');
   const errorMsg = document.getElementById('errorMsg');
   const bugTable = document.getElementById('bugTable');
   const bugListBody = document.getElementById('bugListBody');
+
+  const loadingTrash = document.getElementById('loadingTrash');
+  const errorMsgTrash = document.getElementById('errorMsgTrash');
+  const trashTable = document.getElementById('trashTable');
+  const trashListBody = document.getElementById('trashListBody');
 
   // Modals
   const editModal = document.getElementById('editModal');
@@ -22,7 +30,15 @@ document.addEventListener('DOMContentLoaded', () => {
   let userEmail = '';
 
   // Tab Navigation
-  navMyBugs.addEventListener('click', () => switchTab(navMyBugs, viewMyBugs));
+  // Tab Navigation
+  navMyBugs.addEventListener('click', () => {
+    switchTab(navMyBugs, viewMyBugs);
+    loadBugs();
+  });
+  navTrash.addEventListener('click', () => {
+    switchTab(navTrash, viewTrash);
+    loadTrash();
+  });
   navSettings.addEventListener('click', () => switchTab(navSettings, viewSettings));
 
   function switchTab(navEl, viewEl) {
@@ -164,6 +180,162 @@ document.addEventListener('DOMContentLoaded', () => {
 
     } catch (err) {
       showError(err.toString());
+    }
+  }
+
+  async function loadTrash() {
+    loadingTrash.classList.remove('hidden');
+    trashTable.classList.add('hidden');
+    errorMsgTrash.classList.add('hidden');
+    trashListBody.innerHTML = '';
+
+    try {
+      // 1. Get Folder ID
+      const query = "name='TRACE_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
+      let res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      let json = await res.json();
+      if (!json.files || json.files.length === 0) {
+        showErrorTrash("Folder TRACE_Reports_App not found.");
+        return;
+      }
+      const folderId = json.files[0].id;
+
+      // 2. Get Trashed Files
+      // Note: trashed=true is enough, but we want files in our app folder
+      const fileQuery = `'${folderId}' in parents and trashed=true`;
+      res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(fileQuery)}&fields=files(id,name,mimeType,createdTime)&orderBy=createdTime desc`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      json = await res.json();
+      const files = json.files || [];
+
+      // 3. Group by Timestamp (similar to loadBugs)
+      const bugMap = {};
+      files.forEach(f => {
+        const parts = f.name.split('_');
+        if (parts.length >= 3) {
+          const extPart = parts[parts.length - 1];
+          const tsParts = extPart.split('.');
+          const ts = tsParts[0];
+          const ext = tsParts[1];
+          const rawTitle = parts.slice(1, parts.length - 1).join(' ');
+
+          if (!bugMap[ts]) {
+            bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdTime) };
+          }
+          if (ext === 'webm') bugMap[ts].videoFile = f;
+          if (ext === 'json') bugMap[ts].jsonFile = f;
+        }
+      });
+
+      const bugsArray = Object.values(bugMap)
+        .filter(b => b.videoFile || b.jsonFile) // In trash, maybe only one is left?
+        .sort((a,b) => b.date - a.date);
+
+      if (bugsArray.length === 0) {
+        showErrorTrash("Trash is empty.");
+        return;
+      }
+
+      // Render Trash
+      bugsArray.forEach(bug => {
+        const tr = document.createElement('tr');
+        
+        const titleTd = document.createElement('td');
+        titleTd.innerHTML = `<strong>${bug.originalTitle}</strong>`;
+        
+        const dateTd = document.createElement('td');
+        dateTd.textContent = bug.date.toLocaleString();
+
+        const assetsTd = document.createElement('td');
+        assetsTd.textContent = (bug.videoFile && bug.jsonFile) ? "Video + JSON" : (bug.jsonFile ? "JSON Only" : "Video Only");
+        
+        const actionTd = document.createElement('td');
+        actionTd.className = 'actions';
+        
+        const btnRestore = document.createElement('button');
+        btnRestore.className = 'btn secondary btn-small';
+        btnRestore.textContent = 'Restore';
+        btnRestore.onclick = () => restoreBug(bug);
+        
+        const btnPermanentDel = document.createElement('button');
+        btnPermanentDel.className = 'btn danger btn-small';
+        btnPermanentDel.textContent = 'Delete Forever';
+        btnPermanentDel.onclick = () => permanentDeleteFromTrash(bug);
+
+        actionTd.appendChild(btnRestore);
+        actionTd.appendChild(btnPermanentDel);
+
+        tr.appendChild(titleTd);
+        tr.appendChild(dateTd);
+        tr.appendChild(assetsTd);
+        tr.appendChild(actionTd);
+        trashListBody.appendChild(tr);
+      });
+
+      loadingTrash.classList.add('hidden');
+      trashTable.classList.remove('hidden');
+
+    } catch (err) {
+      showErrorTrash(err.toString());
+    }
+  }
+
+  function showErrorTrash(msg) {
+    loadingTrash.classList.add('hidden');
+    errorMsgTrash.textContent = msg;
+    errorMsgTrash.classList.remove('hidden');
+  }
+
+  btnRefreshTrash.addEventListener('click', loadTrash);
+
+  async function restoreBug(bug) {
+    if (!confirm(`Restore "${bug.originalTitle}"?`)) return;
+    
+    try {
+      if (bug.jsonFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trashed: false })
+        });
+      }
+      if (bug.videoFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trashed: false })
+        });
+      }
+      alert("Report restored.");
+      loadTrash();
+    } catch (err) {
+      alert("Failed to restore: " + err);
+    }
+  }
+
+  async function permanentDeleteFromTrash(bug) {
+    if (!confirm(`DELETE PERMANENTLY "${bug.originalTitle}"?\nThis cannot be undone!`)) return;
+    
+    try {
+      if (bug.jsonFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+      }
+      if (bug.videoFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+      }
+      alert("Report deleted permanently.");
+      loadTrash();
+    } catch (err) {
+      alert("Failed to delete: " + err);
     }
   }
 
