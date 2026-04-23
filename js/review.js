@@ -25,9 +25,120 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Fetch and display logs
-  chrome.storage.local.get(['sessionLogs'], (res) => {
-    const sessionLogs = res.sessionLogs || { console: [], network: [], actions: [], backend: [], info: {} };
+  // Global State
+  let sessionLogs = { console: [], network: [], actions: [], backend: [], info: {} };
+  let isExistingReport = false;
+  let existingJsonId = null;
+  let authToken = null;
+
+  // 1. Check for URL Parameters (Playback/Edit mode)
+  const urlParams = new URLSearchParams(window.location.search);
+  const vId = urlParams.get('v');
+  const lId = urlParams.get('l');
+  const isEditMode = urlParams.get('edit') === 'true';
+
+  if (vId && lId) {
+    isExistingReport = true;
+    existingJsonId = lId;
+    loadFromDrive(vId, lId, isEditMode);
+  } else {
+    loadFromStorage();
+  }
+
+  function loadFromStorage() {
+    chrome.storage.local.get(['sessionLogs'], (res) => {
+      const logs = res.sessionLogs || { console: [], network: [], actions: [], backend: [], info: {} };
+      initReviewUI(logs);
+    });
+
+    chrome.runtime.sendMessage({ action: 'GET_PENDING_VIDEO' }, (res) => {
+      if (res && res.videoBase64) {
+        try {
+          const byteCharacters = atob(res.videoBase64);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: 'video/webm' });
+          videoPreview.src = URL.createObjectURL(blob);
+        } catch (e) {
+          console.error("Video decode failed", e);
+          showError("Error decoding video data.");
+        }
+      } else {
+        showError("Error: No video found to review.");
+      }
+    });
+  }
+
+  async function loadFromDrive(vId, lId, edit) {
+    loading.classList.remove('hidden');
+    loading.textContent = "Fetching from Drive...";
+    
+    try {
+      authToken = await new Promise((resolve, reject) => {
+        chrome.identity.getAuthToken({ interactive: true }, (token) => {
+          if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+          else resolve(token);
+        });
+      });
+
+      // Fetch JSON first for immediate log rendering
+      const jsonRes = await fetch(`https://www.googleapis.com/drive/v3/files/${lId}?alt=media`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const reportData = await jsonRes.json();
+
+      // Setup Save Button for Edit Mode
+      if (edit) {
+        btnSave.textContent = "Update Report";
+        btnSave.classList.remove('hidden');
+      } else {
+        btnSave.classList.add('hidden');
+      }
+
+      // Render logs immediately
+      if (reportData.logs) {
+        inputTitle.value = reportData.title || "";
+        inputDesc.value = reportData.description || "";
+        initReviewUI(reportData.logs);
+      } else if (reportData.console || reportData.network || reportData.actions) {
+        inputTitle.value = reportData.title || "";
+        inputDesc.value = reportData.description || "";
+        initReviewUI(reportData);
+      }
+      
+      loading.textContent = "Fetching video...";
+
+      // Fetch Video in background
+      fetch(`https://www.googleapis.com/drive/v3/files/${vId}?alt=media`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      })
+      .then(r => r.blob())
+      .then(blob => {
+        videoPreview.src = URL.createObjectURL(blob);
+        loading.classList.add('hidden');
+      })
+      .catch(err => {
+        console.error("Video fetch failed", err);
+        loading.textContent = "Logs loaded. Video failed.";
+        setTimeout(() => loading.classList.add('hidden'), 3000);
+      });
+    } catch (err) {
+      showError("Failed to load from Drive: " + err);
+    }
+  }
+
+  function showError(msg) {
+    errorMsg.textContent = msg;
+    errorMsg.classList.remove('hidden');
+    loading.classList.add('hidden');
+  }
+
+  // CORE UI INITIALIZATION
+  function initReviewUI(logs) {
+    sessionLogs = logs;
 
     function parseSec(timeStr) {
       if (!timeStr) return 0;
@@ -974,7 +1085,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-  }); // End storage get
+    // INITIAL RENDER
+    rebuildUnified();
+    renderUnified();
+    renderNetwork();
+    renderUrlTimeline();
+
+  } // End initReviewUI
 
   // Timeline tracker (attached to video preview)
   videoPreview.addEventListener('timeupdate', () => {
@@ -1017,32 +1134,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Fetch pending video from background
-  chrome.runtime.sendMessage({ action: 'GET_PENDING_VIDEO' }, (res) => {
-    if (res && res.videoBase64) {
-      try {
-        const byteCharacters = atob(res.videoBase64);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], { type: 'video/webm' });
-        
-        const videoUrl = URL.createObjectURL(blob);
-        videoPreview.src = videoUrl;
-      } catch (e) {
-        console.error("Base64 decode failed", e);
-        errorMsg.textContent = "Error decoding video data.";
-        errorMsg.classList.remove('hidden');
-      }
-    } else {
-      errorMsg.textContent = "Error: No video found to review.";
-      errorMsg.classList.remove('hidden');
-    }
-  });
 
-  btnSave.addEventListener('click', () => {
+  btnSave.addEventListener('click', async () => {
     const title = inputTitle.value.trim();
     const desc = inputDesc.value.trim();
 
@@ -1056,31 +1149,71 @@ document.addEventListener('DOMContentLoaded', () => {
     loading.classList.remove('hidden');
     errorMsg.classList.add('hidden');
 
-    chrome.runtime.sendMessage({
-      action: 'COMMIT_UPLOAD',
-      title: title,
-      description: desc,
-      info: {
-        browser: document.getElementById('infoBrowser').textContent,
-        os: document.getElementById('infoOS').textContent,
-        resolution: document.getElementById('infoRes').textContent,
-        location: document.getElementById('infoLocation').textContent,
-        timestamp: document.getElementById('infoTimestamp').textContent,
-        url: "-"
-      }
-    }, (res) => {
-      btnSave.disabled = false;
-      loading.classList.add('hidden');
+    if (isExistingReport) {
+      // --- UPDATE EXISTING REPORT ---
+      try {
+        // 1. Fetch current JSON to update its fields
+        const res = await fetch(`https://www.googleapis.com/drive/v3/files/${existingJsonId}?alt=media`, {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+        const fullData = await res.json();
+        
+        fullData.title = title;
+        fullData.description = desc;
+        if (fullData.metadata) fullData.metadata.lastUpdated = new Date().toISOString();
 
-      if (res && res.success) {
+        // 2. Upload PATCH
+        const blob = new Blob([JSON.stringify(fullData, null, 2)], { type: 'application/json' });
+        await fetch(`https://www.googleapis.com/upload/drive/v3/files/${existingJsonId}?uploadType=media`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${authToken}` },
+          body: blob
+        });
+
+        loading.classList.add('hidden');
+        btnSave.disabled = false;
+        
+        // Show success
         stepForm.classList.add('hidden');
         stepSuccess.classList.remove('hidden');
-        shareLink.value = res.url;
-      } else {
-        errorMsg.textContent = "Upload failed: " + (res.error || 'Unknown error');
-        errorMsg.classList.remove('hidden');
+        document.querySelector('#stepSuccess h2').textContent = "Successfully Updated!";
+        
+        // Use the Netlify player URL for the share link
+        const videoId = urlParams.get('v');
+        shareLink.value = `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoId}&l=${existingJsonId}`;
+        
+      } catch (err) {
+        showError("Failed to update: " + err);
+        btnSave.disabled = false;
       }
-    });
+    } else {
+      // --- NORMAL COMMIT UPLOAD ---
+      chrome.runtime.sendMessage({
+        action: 'COMMIT_UPLOAD',
+        title: title,
+        description: desc,
+        info: {
+          browser: document.getElementById('infoBrowser').textContent,
+          os: document.getElementById('infoOS').textContent,
+          resolution: document.getElementById('infoRes').textContent,
+          location: document.getElementById('infoLocation').textContent,
+          timestamp: document.getElementById('infoTimestamp').textContent,
+          url: "-"
+        }
+      }, (res) => {
+        btnSave.disabled = false;
+        loading.classList.add('hidden');
+
+        if (res && res.success) {
+          stepForm.classList.add('hidden');
+          stepSuccess.classList.remove('hidden');
+          shareLink.value = res.url;
+        } else {
+          errorMsg.textContent = "Upload failed: " + (res.error || 'Unknown error');
+          errorMsg.classList.remove('hidden');
+        }
+      });
+    }
   });
 
   btnCopy.addEventListener('click', () => {

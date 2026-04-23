@@ -136,12 +136,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const btnPlay = document.createElement('button');
         btnPlay.className = 'btn secondary btn-small';
         btnPlay.textContent = 'Play';
-        btnPlay.onclick = () => window.open(`http://localhost:5500/index.html?v=${bug.videoFile.id}&l=${bug.jsonFile.id}`, '_blank');
+        btnPlay.onclick = () => window.open(`https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${bug.videoFile.id}&l=${bug.jsonFile.id}`, '_blank');
         
         const btnEdit = document.createElement('button');
         btnEdit.className = 'btn primary btn-small';
         btnEdit.textContent = 'Edit';
-        btnEdit.onclick = () => openEditModal(bug);
+        btnEdit.onclick = () => window.open(`review.html?v=${bug.videoFile.id}&l=${bug.jsonFile.id}&edit=true`, '_blank');
 
         const btnDel = document.createElement('button');
         btnDel.className = 'btn danger btn-small';
@@ -173,91 +173,11 @@ document.addEventListener('DOMContentLoaded', () => {
     errorMsg.classList.remove('hidden');
   }
 
-  // --- EDIT LOGIC ---
-  const inputEditTitle = document.getElementById('editTitle');
-  const inputEditDesc = document.getElementById('editDesc');
-  const btnSaveEdit = document.getElementById('btnSaveEdit');
-
-  async function openEditModal(bug) {
-    currentActionItem = bug;
-    inputEditTitle.value = bug.originalTitle;
-    inputEditDesc.value = "Loading description...";
-    btnSaveEdit.disabled = true;
-    editModal.classList.remove('hidden');
-
-    // Fetch JSON content to get the real description
-    try {
-      const res = await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}?alt=media`, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      const data = await res.json();
-      inputEditDesc.value = data.description || '';
-      currentActionItem.fullJsonData = data; // store it to re-upload
-      btnSaveEdit.disabled = false;
-    } catch (err) {
-      inputEditDesc.value = "Error loading desc.";
-      console.error(err);
-    }
-  }
-
-  document.getElementById('btnCancelEdit').onclick = () => {
-    editModal.classList.add('hidden');
-  };
-
-  btnSaveEdit.onclick = async () => {
-    const bug = currentActionItem;
-    const newTitle = inputEditTitle.value.trim();
-    const newDesc = inputEditDesc.value.trim();
-
-    if (!newTitle) return;
-    
-    btnSaveEdit.disabled = true;
-    btnSaveEdit.textContent = "Saving...";
-
-    try {
-      // 1. Update JSON Content
-      bug.fullJsonData.title = newTitle;
-      bug.fullJsonData.description = newDesc;
-      
-      const jsonBlob = new Blob([JSON.stringify(bug.fullJsonData, null, 2)], {type: 'application/json'});
-      
-      await fetch(`https://www.googleapis.com/upload/drive/v3/files/${bug.jsonFile.id}?uploadType=media`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${authToken}` },
-        body: jsonBlob
-      });
-
-      // 2. Rename Files to match new title format (Bug_Title_Timestamp.*)
-      const sanitizedTitle = newTitle.replace(/[^a-zA-Z0-9]/g, '_');
-      const newVideoName = `Trace_${sanitizedTitle}_${bug.id}.webm`;
-      const newJsonName = `Trace_${sanitizedTitle}_${bug.id}.json`;
-
-      await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newVideoName })
-      });
-
-      await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newJsonName })
-      });
-
-      editModal.classList.add('hidden');
-      btnSaveEdit.textContent = "Save Changes";
-      loadBugs(); // refresh
-
-    } catch (err) {
-      alert("Failed to edit: " + err);
-      btnSaveEdit.textContent = "Save Changes";
-      btnSaveEdit.disabled = false;
-    }
-  };
 
 
   // --- DELETE LOGIC ---
-  const btnConfirmDelete = document.getElementById('btnConfirmDelete');
+  const btnConfirmTrash = document.getElementById('btnConfirmTrash');
+  const btnConfirmPermanent = document.getElementById('btnConfirmPermanent');
 
   function openDeleteModal(bug) {
     currentActionItem = bug;
@@ -268,32 +188,65 @@ document.addEventListener('DOMContentLoaded', () => {
     deleteModal.classList.add('hidden');
   };
 
-  btnConfirmDelete.onclick = async () => {
+  btnConfirmTrash.onclick = async () => {
     const bug = currentActionItem;
-    btnConfirmDelete.disabled = true;
-    btnConfirmDelete.textContent = "Deleting...";
+    btnConfirmTrash.disabled = true;
+    btnConfirmTrash.textContent = "Processing...";
 
     try {
-      // Delete JSON
+      // Move JSON to trash
+      await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trashed: true })
+      });
+      // Move Video to trash
+      await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trashed: true })
+      });
+
+      deleteModal.classList.add('hidden');
+      btnConfirmTrash.textContent = "🗑️ Move to Trash (Safe)";
+      btnConfirmTrash.disabled = false;
+      loadBugs();
+
+    } catch(err) {
+      alert("Failed to trash: " + err);
+      btnConfirmTrash.textContent = "🗑️ Move to Trash (Safe)";
+      btnConfirmTrash.disabled = false;
+    }
+  };
+
+  btnConfirmPermanent.onclick = async () => {
+    if (!confirm("Are you ABSOLUTELY sure? This cannot be undone.")) return;
+    
+    const bug = currentActionItem;
+    btnConfirmPermanent.disabled = true;
+    btnConfirmPermanent.textContent = "Deleting...";
+
+    try {
+      // Delete JSON permanently
       await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      // Delete Video
+      // Delete Video permanently
       await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${authToken}` }
       });
 
       deleteModal.classList.add('hidden');
-      btnConfirmDelete.textContent = "Yes, Delete It";
-      btnConfirmDelete.disabled = false;
+      btnConfirmPermanent.textContent = "🔥 Delete Permanently (Irreversible)";
+      btnConfirmPermanent.disabled = false;
       loadBugs();
 
     } catch(err) {
-      alert("Failed to delete: " + err);
-      btnConfirmDelete.textContent = "Yes, Delete It";
-      btnConfirmDelete.disabled = false;
+      alert("Failed to delete permanently: " + err);
+      btnConfirmPermanent.textContent = "🔥 Delete Permanently (Irreversible)";
+      btnConfirmPermanent.disabled = false;
     }
   };
 
