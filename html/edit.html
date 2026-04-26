@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>T.R.A.C.E - Video Editor</title>
+  <link rel="stylesheet" href="../css/edit.css">
+</head>
+<body>
+  <div class="editor-layout">
+    <!-- Header -->
+    <header class="editor-header">
+      <div class="logo">
+        <span class="icon">🎬</span>
+        <span class="text">T.R.A.C.E <b>Editor</b></span>
+      </div>
+      <div class="header-actions">
+        <button id="btnCancel" class="btn-text">Cancel</button>
+        <button id="btnApply" class="btn-primary">Apply & Save</button>
+      </div>
+    </header>
+
+    <main class="editor-main">
+      <!-- Left Toolbar -->
+      <aside class="editor-toolbar">
+        <button class="tool-btn active" data-tool="select" title="Select (V)">
+          <span class="icon">🖱️</span>
+        </button>
+        <button class="tool-btn" data-tool="pen" title="Pen (P)">
+          <span class="icon">✏️</span>
+        </button>
+        <button class="tool-btn" data-tool="crop" title="Crop Area (C)">
+          <span class="icon">✂️</span>
+        </button>
+        <button class="tool-btn" data-tool="draw-rect" title="Rectangle (R)">
+          <span class="icon">⬜</span>
+        </button>
+        <button class="tool-btn" data-tool="draw-circle" title="Circle (O)">
+          <span class="icon">⭕</span>
+        </button>
+        <button class="tool-btn" data-tool="blur" title="Blur Area (B)">
+          <span class="icon">🌫️</span>
+        </button>
+        <button class="tool-btn" data-tool="zoom" title="Magnifier (Z)">
+          <span class="icon">🔍</span>
+        </button>
+        <div class="spacer"></div>
+        <div class="speed-control">
+          <label>Speed</label>
+          <select id="playbackSpeed">
+            <option value="0.25">0.25x</option>
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+          </select>
+        </div>
+      </aside>
+
+      <!-- Center Stage -->
+      <section class="editor-stage">
+        <div class="canvas-container" id="canvasContainer">
+          <video id="sourceVideo" style="display:none;"></video>
+          <canvas id="editorCanvas"></canvas>
+          <div id="interactionLayer" class="interaction-layer"></div>
+        </div>
+        
+        <!-- Timeline -->
+        <div class="timeline-container">
+          <div class="timeline-header">
+            <div class="time-display">
+              <span id="currentTime">00:00</span> / <span id="duration">00:00</span>
+            </div>
+            <div class="playback-controls">
+              <button id="btnBack5" class="ctrl-btn">⏪</button>
+              <button id="btnPlayPause" class="ctrl-btn main">▶</button>
+              <button id="btnFwd5" class="ctrl-btn">⏩</button>
+            </div>
+          </div>
+          
+          <div class="timeline-track-wrapper">
+            <div id="timelineTrack" class="timeline-track">
+              <div id="playhead" class="playhead"></div>
+              <div id="cutZones" class="cut-zones-container"></div>
+              <canvas id="timelineWaveform"></canvas>
+            </div>
+            <div class="timeline-actions">
+              <button id="btnMarkCut" class="btn-sm">✂️ Mark Cut Start</button>
+              <button id="btnDeleteSegment" class="btn-sm danger">🗑️ Delete Selected</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Panel: Properties -->
+      <aside class="editor-properties">
+        <h3>Properties</h3>
+        <div class="prop-group" id="propDraw" style="display:none;">
+          <label>Line Thickness: <span id="valStrokeWidth">3</span>px</label>
+          <input type="range" id="propStrokeWidth" min="1" max="20" value="3">
+          <label>Color</label>
+          <div class="color-grid">
+            <div class="color-swatch active" style="background:#ff0000" data-color="#ff0000"></div>
+            <div class="color-swatch" style="background:#00ff00" data-color="#00ff00"></div>
+            <div class="color-swatch" style="background:#0000ff" data-color="#0000ff"></div>
+            <div class="color-swatch" style="background:#ffff00" data-color="#ffff00"></div>
+            <div class="color-swatch" style="background:#ffffff" data-color="#ffffff"></div>
+          </div>
+        </div>
+        
+        <div class="prop-group" id="propBlur" style="display:none;">
+          <label>Blur Intensity</label>
+          <input type="range" id="propBlurAmount" min="5" max="50" value="15">
+        </div>
+
+        <div class="active-edits">
+          <h4>Active Edits</h4>
+          <div id="editList" class="edit-list">
+            <!-- List of cuts/drawings -->
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Overlay for Rendering -->
+    <div id="renderOverlay" class="render-overlay hidden">
+      <div class="render-box">
+        <h3>Processing Video...</h3>
+        <div class="progress-bar">
+          <div id="renderProgress" class="progress-fill"></div>
+        </div>
+        <p id="renderStatus">Encoding frames... 0%</p>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/edit.js"></script>
+</body>
+</html>

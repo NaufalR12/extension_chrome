@@ -9,6 +9,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnCopy = document.getElementById('btnCopy');
   const loading = document.getElementById('loading');
   const errorMsg = document.getElementById('errorMsg');
+  const btnEditVideo = document.getElementById('btnEditVideo');
+
+  if (btnEditVideo) {
+    btnEditVideo.addEventListener('click', () => {
+      // Simpan logs saat ini ke sessionStorage agar bisa diakses editor
+      sessionStorage.setItem('editLogs', JSON.stringify(sessionLogs));
+      // Buka halaman editor
+      window.location.href = 'edit.html';
+    });
+  }
 
   // Logs Tabs Setup
   const tabs = document.querySelectorAll('.tab');
@@ -46,10 +56,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function loadFromStorage() {
-    chrome.storage.local.get(['sessionLogs'], (res) => {
-      const logs = res.sessionLogs || { console: [], network: [], actions: [], backend: [], info: {} };
-      initReviewUI(logs);
-    });
+    const editedLogs = sessionStorage.getItem('editLogs');
+    if (editedLogs) {
+      initReviewUI(JSON.parse(editedLogs));
+    } else {
+      chrome.storage.local.get(['sessionLogs'], (res) => {
+        const logs = res.sessionLogs || { console: [], network: [], actions: [], backend: [], info: {} };
+        initReviewUI(logs);
+      });
+    }
 
     chrome.runtime.sendMessage({ action: 'GET_PENDING_VIDEO' }, (res) => {
       if (res && res.videoBase64) {

@@ -456,6 +456,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ videoBase64: pendingVideoBase64 });
   } 
   
+  else if (request.action === 'SAVE_PENDING_VIDEO') {
+    pendingVideoBase64 = request.videoBase64;
+    sendResponse({ success: true });
+  }
+  
   else if (request.action === 'COMMIT_UPLOAD') {
     commitUpload(request.title, request.description, pendingVideoBase64, request.info)
       .then(url => sendResponse({ success: true, url }))
