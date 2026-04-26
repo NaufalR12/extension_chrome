@@ -57,14 +57,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function loadFromStorage() {
     const editedLogs = sessionStorage.getItem('editLogs');
-    if (editedLogs) {
-      initReviewUI(JSON.parse(editedLogs));
-    } else {
-      chrome.storage.local.get(['sessionLogs'], (res) => {
-        const logs = res.sessionLogs || { console: [], network: [], actions: [], backend: [], info: {} };
-        initReviewUI(logs);
-      });
-    }
+    
+    chrome.storage.local.get(['sessionLogs', 'pendingReport'], (res) => {
+      // Prioritaskan editedLogs dari session (hasil edit baru)
+      // Jika tidak ada, gunakan sessionLogs dari storage (bisa jadi hasil edit sebelumnya yang sudah dipersist)
+      const logs = editedLogs ? JSON.parse(editedLogs) : (res.sessionLogs || { console: [], network: [], actions: [], backend: [], info: {} });
+      
+      // Load Title & Desc dari storage agar tidak hilang saat refresh
+      if (res.pendingReport) {
+        inputTitle.value = res.pendingReport.title || "";
+        inputDesc.value = res.pendingReport.description || "";
+      }
+      
+      initReviewUI(logs);
+    });
 
     chrome.runtime.sendMessage({ action: 'GET_PENDING_VIDEO' }, (res) => {
       if (res && res.videoBase64) {
@@ -1263,6 +1269,9 @@ document.addEventListener('DOMContentLoaded', () => {
           stepForm.classList.add('hidden');
           stepSuccess.classList.remove('hidden');
           shareLink.value = res.url;
+          // Clean up temporary data after successful upload
+          chrome.storage.local.remove(['pendingReport', 'sessionLogs']);
+          sessionStorage.removeItem('editLogs');
         } else {
           errorMsg.textContent = "Upload failed: " + (res.error || 'Unknown error');
           errorMsg.classList.remove('hidden');
@@ -1270,6 +1279,18 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
   });
+
+  // Auto-save Title & Description as user types
+  const autoSave = () => {
+    chrome.storage.local.set({
+      pendingReport: {
+        title: inputTitle.value,
+        description: inputDesc.value
+      }
+    });
+  };
+  inputTitle.addEventListener('input', autoSave);
+  inputDesc.addEventListener('input', autoSave);
 
   btnCopy.addEventListener('click', () => {
     shareLink.select();

@@ -252,12 +252,28 @@ document.addEventListener('DOMContentLoaded', () => {
       const end = sourceVideo.currentTime;
       const start = Math.min(currentCutStart, end);
       const realEnd = Math.max(currentCutStart, end);
-      cuts.push({ start, end: realEnd });
+      const newCut = { start, end: realEnd };
+      cuts.push(newCut);
       currentCutStart = null;
       document.getElementById('btnMarkCut').textContent = '✂️ Mark Cut Start';
       document.getElementById('btnMarkCut').classList.remove('active');
       renderCutZones();
-      addEditItem('Cut Segment', { start, end: realEnd });
+      addEditItem('Cut Segment', newCut);
+    }
+  });
+
+  document.getElementById('btnDeleteSegment').addEventListener('click', () => {
+    if (cuts.length > 0) {
+      const lastCut = cuts.pop();
+      // Remove from UI list as well
+      const items = editListContainer.querySelectorAll('.edit-item');
+      for (let item of items) {
+        if (item.textContent.includes('Cut Segment') && item.dataset.start == lastCut.start) {
+          item.remove();
+          break;
+        }
+      }
+      renderCutZones();
     }
   });
 
@@ -278,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function addEditItem(label, data) {
     const item = document.createElement('div');
     item.className = 'edit-item';
+    if (data.start != null) item.dataset.start = data.start;
     const timeInfo = data.start != null ? `[${formatTime(data.start)}-${formatTime(data.end)}]` : '';
     item.innerHTML = `<span>${label} ${timeInfo}</span> <button class="remove-btn">✕</button>`;
     
@@ -299,32 +316,35 @@ document.addEventListener('DOMContentLoaded', () => {
     isPlaying = false;
     sourceVideo.pause();
     
-    const stream = canvas.captureStream(30); // 30 FPS
+    // Sort and Merge Cuts for rendering
+    const finalCuts = mergeOverlappingCuts(cuts);
+    
+    const stream = canvas.captureStream(30); 
     const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9', bitsPerSecond: 5000000 });
     const chunks = [];
     
     recorder.ondataavailable = e => chunks.push(e.data);
     recorder.onstop = async () => {
       const newBlob = new Blob(chunks, { type: 'video/webm' });
-      const newLogs = syncLogs(sessionLogs, cuts);
+      const newLogs = syncLogs(sessionLogs, finalCuts);
       
-      // Save back to storage and redirect
       const reader = new FileReader();
       reader.onload = () => {
         const base64 = reader.result.split(',')[1];
         chrome.runtime.sendMessage({ action: 'SAVE_PENDING_VIDEO', videoBase64: base64 }, () => {
-          sessionStorage.setItem('editLogs', JSON.stringify(newLogs));
-          window.location.href = 'review.html';
+          // Persist edited logs to storage so they survive refresh
+          chrome.storage.local.set({ sessionLogs: newLogs }, () => {
+            sessionStorage.setItem('editLogs', JSON.stringify(newLogs));
+            window.location.href = 'review.html';
+          });
         });
       };
       reader.readAsDataURL(newBlob);
     };
 
-    // Render Process
     recorder.start();
     
-    // We need to play through the video, but ONLY segments that are NOT cut.
-    const segments = calculateKeepSegments(sourceVideo.duration, cuts);
+    const segments = calculateKeepSegments(sourceVideo.duration, finalCuts);
     let totalKeepDuration = segments.reduce((sum, s) => sum + (s.end - s.start), 0);
     let processed = 0;
 
@@ -337,13 +357,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const segDuration = (seg.end - seg.start);
       sourceVideo.play();
       
-      const startTime = Date.now();
       while (sourceVideo.currentTime < seg.end) {
         drawFrame();
         const pct = Math.min(100, ((processed + (sourceVideo.currentTime - seg.start)) / totalKeepDuration) * 100);
         renderProgress.style.width = `${pct}%`;
         renderStatus.textContent = `Encoding frames... ${Math.round(pct)}%`;
-        await new Promise(r => setTimeout(r, 16)); // ~60fps logic
+        await new Promise(r => setTimeout(r, 16)); 
         if (sourceVideo.ended) break;
       }
       sourceVideo.pause();
@@ -353,70 +372,117 @@ document.addEventListener('DOMContentLoaded', () => {
     recorder.stop();
   });
 
-  function calculateKeepSegments(duration, cutList) {
-    if (cutList.length === 0) return [{ start: 0, end: duration }];
-    
-    const sortedCuts = [...cutList].sort((a, b) => a.start - b.start);
+  function mergeOverlappingCuts(cutList) {
+    if (cutList.length <= 1) return cutList;
+    const sorted = [...cutList].sort((a, b) => a.start - b.start);
+    const merged = [];
+    let current = { ...sorted[0] };
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i].start <= current.end) {
+        current.end = Math.max(current.end, sorted[i].end);
+      } else {
+        merged.push(current);
+        current = { ...sorted[i] };
+      }
+    }
+    merged.push(current);
+    return merged;
+  }
+
+  function calculateKeepSegments(duration, mergedCuts) {
+    if (mergedCuts.length === 0) return [{ start: 0, end: duration }];
     const keeps = [];
     let lastEnd = 0;
-    
-    sortedCuts.forEach(cut => {
-      if (cut.start > lastEnd) {
-        keeps.push({ start: lastEnd, end: cut.start });
-      }
+    mergedCuts.forEach(cut => {
+      if (cut.start > lastEnd) keeps.push({ start: lastEnd, end: cut.start });
       lastEnd = Math.max(lastEnd, cut.end);
     });
-    
-    if (lastEnd < duration) {
-      keeps.push({ start: lastEnd, end: duration });
-    }
+    if (lastEnd < duration) keeps.push({ start: lastEnd, end: duration });
     return keeps;
   }
 
   // --- LOG SYNC ALGORITHM ---
-  function syncLogs(logs, cutList) {
-    if (cutList.length === 0) return logs;
+  function syncLogs(logs, mergedCuts) {
+    if (mergedCuts.length === 0) return logs;
     
-    const newLogs = JSON.parse(JSON.stringify(logs)); // Deep clone
+    const newLogs = JSON.parse(JSON.stringify(logs));
     const categories = ['console', 'network', 'actions', 'backend'];
     
+    function getNewTime(oldTimeSec) {
+      let totalCutBefore = 0;
+      for (const cut of mergedCuts) {
+        if (oldTimeSec >= cut.end) {
+          totalCutBefore += (cut.end - cut.start);
+        } else if (oldTimeSec > cut.start && oldTimeSec < cut.end) {
+          return null; // Inside cut
+        }
+      }
+      return Math.max(0, oldTimeSec - totalCutBefore);
+    }
+
     categories.forEach(cat => {
       if (!newLogs[cat]) return;
-      
-      newLogs[cat] = newLogs[cat].filter(item => {
-        const time = (item.relativeMs / 1000) || parseSec(item.time);
-        // Remove if inside a cut zone
-        const isCut = cutList.some(c => time >= c.start && time <= c.end);
-        return !isCut;
-      }).map(item => {
-        const time = (item.relativeMs / 1000) || parseSec(item.time);
-        // Calculate shift
-        const totalCutBefore = cutList
-          .filter(c => c.end <= time)
-          .reduce((sum, c) => sum + (c.end - c.start), 0);
-        
-        // Handle overlapping cuts (if any) - simple version assumes non-overlapping
-        const newTimeSec = time - totalCutBefore;
-        item.relativeMs = Math.round(newTimeSec * 1000);
-        item.time = `[${formatTime(newTimeSec)}]`;
+      newLogs[cat] = newLogs[cat].map(item => {
+        const oldT = (item.relativeMs / 1000) || parseSec(item.time);
+        const newT = getNewTime(oldT);
+        if (newT === null) return null;
+        item.relativeMs = Math.round(newT * 1000);
+        item.time = `[${formatTime(newT)}]`;
         return item;
-      });
+      }).filter(Boolean);
     });
 
-    // Also sync URL Timeline
+    // Process URL Timeline (Carefully)
     if (newLogs.info && newLogs.info.urlTimeline) {
-      newLogs.info.urlTimeline = newLogs.info.urlTimeline.filter(item => {
-        const t = item.timeMs / 1000;
-        return !cutList.some(c => t >= c.start && t <= c.end);
-      }).map(item => {
-        const t = item.timeMs / 1000;
-        const totalCutBefore = cutList
-          .filter(c => c.end <= t)
-          .reduce((sum, c) => sum + (c.end - c.start), 0);
-        item.timeMs = Math.round((t - totalCutBefore) * 1000);
-        item.time = t - totalCutBefore;
-        return item;
+      let timeline = [];
+      const originalTimeline = logs.info.urlTimeline || [];
+      
+      // Re-map URL timeline entries
+      originalTimeline.forEach((item, idx) => {
+        const oldT = (item.timeMs / 1000) || item.time || 0;
+        const newT = getNewTime(oldT);
+        
+        if (newT !== null) {
+          timeline.push({ ...item, time: newT, timeMs: Math.round(newT * 1000) });
+        } else {
+          // Entry is inside a cut. 
+          // We need to see if this URL is still the "current" one when we exit the cut.
+          // Find the end of this cut
+          const currentCut = mergedCuts.find(c => oldT >= c.start && oldT <= c.end);
+          const nextEntry = originalTimeline[idx + 1];
+          const nextEntryTime = nextEntry ? ((nextEntry.timeMs / 1000) || nextEntry.time) : Infinity;
+          
+          if (nextEntryTime > currentCut.end) {
+            // This URL remains active after the cut ends.
+            // We should add an entry at the very beginning of the post-cut segment.
+            const newTPostCut = getNewTime(currentCut.end);
+            timeline.push({ ...item, time: newTPostCut, timeMs: Math.round(newTPostCut * 1000) });
+          }
+        }
       });
+
+      // Filter duplicates and sort
+      timeline.sort((a,b) => a.time - b.time);
+      
+      const uniqueTimeline = [];
+      timeline.forEach(entry => {
+        const last = uniqueTimeline[uniqueTimeline.length - 1];
+        if (!last || last.url !== entry.url) {
+          uniqueTimeline.push(entry);
+        } else if (last && last.url === entry.url) {
+          // Keep the earliest time for the same URL
+          if (entry.time < last.time) last.time = entry.time;
+        }
+      });
+
+      // Ensure start at t=0
+      if (uniqueTimeline.length > 0) {
+        uniqueTimeline[0].time = 0;
+        uniqueTimeline[0].timeMs = 0;
+      }
+
+      newLogs.info.urlTimeline = uniqueTimeline;
+      if (uniqueTimeline.length > 0) newLogs.info.url = uniqueTimeline[0].url;
     }
 
     return newLogs;

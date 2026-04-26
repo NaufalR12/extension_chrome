@@ -447,17 +447,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   else if (request.action === 'recordingStopped') {
     pendingVideoBase64 = request.base64data;
+    chrome.storage.local.set({ pendingVideo: request.base64data });
     chrome.tabs.create({ url: chrome.runtime.getURL('html/review.html') });
     chrome.offscreen.closeDocument();
   }
 
   // 3. Review & Upload
   else if (request.action === 'GET_PENDING_VIDEO') {
-    sendResponse({ videoBase64: pendingVideoBase64 });
+    if (pendingVideoBase64) {
+      sendResponse({ videoBase64: pendingVideoBase64 });
+    } else {
+      chrome.storage.local.get(['pendingVideo'], (res) => {
+        sendResponse({ videoBase64: res.pendingVideo });
+      });
+      return true; // async
+    }
   } 
   
   else if (request.action === 'SAVE_PENDING_VIDEO') {
     pendingVideoBase64 = request.videoBase64;
+    chrome.storage.local.set({ pendingVideo: request.videoBase64 });
     sendResponse({ success: true });
   }
   
@@ -600,7 +609,8 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   await new Promise(r => setTimeout(r, 1000));
 
   resetLogs();
-  pendingVideoBase64 = null; // Free up
+  pendingVideoBase64 = null;
+  chrome.storage.local.remove(['pendingVideo', 'pendingReport']);
   
   // Return Hosted Player Web App URL (Netlify Public Link)
   return `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoFileId}&l=${jsonFileId}`;

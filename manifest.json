@@ -14,7 +14,8 @@
     "offscreen",
     "cookies",
     "webRequest",
-    "webRequestExtraHeaders"
+    "webRequestExtraHeaders",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>",
