@@ -187,7 +187,12 @@
       });
     });
   });
-  resourceObserver.observe({ entryTypes: ['resource'], buffered: true });
+  try {
+    resourceObserver.observe({ type: 'resource', buffered: true });
+  } catch (e) {
+    // Fallback for older browsers
+    resourceObserver.observe({ entryTypes: ['resource'] });
+  }
 
   // Override Fetch
   const originalFetch = window.fetch;

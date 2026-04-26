@@ -45,7 +45,20 @@ document.addEventListener('DOMContentLoaded', () => {
       sessionLogs = JSON.parse(savedLogs);
     }
 
-    // 2. Get Video from Background
+    // 2. Try to get Video from IndexedDB first (most reliable)
+    try {
+      const dbBlob = await getVideoFromDB();
+      if (dbBlob) {
+        console.log("Loading video from IndexedDB");
+        originalVideoBlob = dbBlob;
+        loadVideoToPlayer(dbBlob);
+        return;
+      }
+    } catch (e) {
+      console.warn("IndexedDB check failed, falling back to background message", e);
+    }
+
+    // 3. Fallback: Get Video from Background
     chrome.runtime.sendMessage({ action: 'GET_PENDING_VIDEO' }, (res) => {
       if (res && res.videoBase64) {
         try {
@@ -55,14 +68,7 @@ document.addEventListener('DOMContentLoaded', () => {
             byteNumbers[i] = byteCharacters.charCodeAt(i);
           }
           originalVideoBlob = new Blob([byteNumbers], { type: 'video/webm' });
-          sourceVideo.src = URL.createObjectURL(originalVideoBlob);
-          
-          sourceVideo.onloadedmetadata = () => {
-            canvas.width = sourceVideo.videoWidth;
-            canvas.height = sourceVideo.videoHeight;
-            durationDisplay.textContent = formatTime(sourceVideo.duration);
-            requestAnimationFrame(renderLoop);
-          };
+          loadVideoToPlayer(originalVideoBlob);
         } catch (e) {
           console.error("Video load failed", e);
           alert("Failed to load video for editing.");
@@ -71,6 +77,16 @@ document.addEventListener('DOMContentLoaded', () => {
         alert("No video found to edit.");
       }
     });
+  }
+
+  function loadVideoToPlayer(blob) {
+    sourceVideo.src = URL.createObjectURL(blob);
+    sourceVideo.onloadedmetadata = () => {
+      canvas.width = sourceVideo.videoWidth;
+      canvas.height = sourceVideo.videoHeight;
+      durationDisplay.textContent = formatTime(sourceVideo.duration);
+      requestAnimationFrame(renderLoop);
+    };
   }
 
   init();
@@ -201,7 +217,7 @@ document.addEventListener('DOMContentLoaded', () => {
       currentAnnotation.h = curY - startY;
     }
     
-    if (!isPlaying) drawFrame(); // Force redraw when scrubbing/drawing while paused
+    if (!isPlaying) drawFrame(); 
   });
 
   interactionLayer.addEventListener('mouseup', () => {
@@ -265,7 +281,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btnDeleteSegment').addEventListener('click', () => {
     if (cuts.length > 0) {
       const lastCut = cuts.pop();
-      // Remove from UI list as well
       const items = editListContainer.querySelectorAll('.edit-item');
       for (let item of items) {
         if (item.textContent.includes('Cut Segment') && item.dataset.start == lastCut.start) {
@@ -310,40 +325,49 @@ document.addEventListener('DOMContentLoaded', () => {
     editListContainer.appendChild(item);
   }
 
-  // --- RENDERING ENGINE (THE BRAIN) ---
+  // --- RENDERING ENGINE ---
   document.getElementById('btnApply').addEventListener('click', async () => {
     renderOverlay.classList.remove('hidden');
     isPlaying = false;
     sourceVideo.pause();
     
-    // Sort and Merge Cuts for rendering
     const finalCuts = mergeOverlappingCuts(cuts);
-    
     const stream = canvas.captureStream(30); 
-    const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp9', bitsPerSecond: 5000000 });
+    const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
     const chunks = [];
     
-    recorder.ondataavailable = e => chunks.push(e.data);
+    recorder.ondataavailable = e => {
+      if (e.data && e.data.size > 0) chunks.push(e.data);
+    };
+    
     recorder.onstop = async () => {
+      console.log(`Recording finished. Chunks collected: ${chunks.length}`);
+      if (chunks.length === 0) {
+        alert("Failed to capture video.");
+        renderOverlay.classList.add('hidden');
+        return;
+      }
+      
       const newBlob = new Blob(chunks, { type: 'video/webm' });
       const newLogs = syncLogs(sessionLogs, finalCuts);
       
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = reader.result.split(',')[1];
-        chrome.runtime.sendMessage({ action: 'SAVE_PENDING_VIDEO', videoBase64: base64 }, () => {
-          // Persist edited logs to storage so they survive refresh
+      try {
+        await saveVideoToDB(newBlob);
+        chrome.runtime.sendMessage({ action: 'SAVE_PENDING_VIDEO', useDB: true }, () => {
           chrome.storage.local.set({ sessionLogs: newLogs }, () => {
             sessionStorage.setItem('editLogs', JSON.stringify(newLogs));
             window.location.href = 'review.html';
           });
         });
-      };
-      reader.readAsDataURL(newBlob);
+      } catch (err) {
+        console.error("Save to DB failed:", err);
+        alert("Error saving video.");
+      }
     };
 
-    recorder.start();
-    
+    recorder.start(1000); 
+    await new Promise(r => setTimeout(r, 100));
+
     const segments = calculateKeepSegments(sourceVideo.duration, finalCuts);
     let totalKeepDuration = segments.reduce((sum, s) => sum + (s.end - s.start), 0);
     let processed = 0;
@@ -361,7 +385,7 @@ document.addEventListener('DOMContentLoaded', () => {
         drawFrame();
         const pct = Math.min(100, ((processed + (sourceVideo.currentTime - seg.start)) / totalKeepDuration) * 100);
         renderProgress.style.width = `${pct}%`;
-        renderStatus.textContent = `Encoding frames... ${Math.round(pct)}%`;
+        renderStatus.textContent = `Encoding... ${Math.round(pct)}%`;
         await new Promise(r => setTimeout(r, 16)); 
         if (sourceVideo.ended) break;
       }
@@ -371,6 +395,45 @@ document.addEventListener('DOMContentLoaded', () => {
 
     recorder.stop();
   });
+
+  // --- UTILS & HELPERS ---
+  async function saveVideoToDB(blob) {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open("TRACE_Storage", 1);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
+      };
+      request.onsuccess = (e) => {
+        const db = e.target.result;
+        const transaction = db.transaction("videos", "readwrite");
+        const store = transaction.objectStore("videos");
+        const putRequest = store.put(blob, "pendingVideo");
+        putRequest.onsuccess = () => resolve();
+        putRequest.onerror = () => reject(putRequest.error);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async function getVideoFromDB() {
+    return new Promise((resolve) => {
+      const request = indexedDB.open("TRACE_Storage", 1);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
+      };
+      request.onsuccess = (e) => {
+        const db = e.target.result;
+        const transaction = db.transaction("videos", "readonly");
+        const store = transaction.objectStore("videos");
+        const getRequest = store.get("pendingVideo");
+        getRequest.onsuccess = () => resolve(getRequest.result);
+        getRequest.onerror = () => resolve(null);
+      };
+      request.onerror = () => resolve(null);
+    });
+  }
 
   function mergeOverlappingCuts(cutList) {
     if (cutList.length <= 1) return cutList;
@@ -401,25 +464,18 @@ document.addEventListener('DOMContentLoaded', () => {
     return keeps;
   }
 
-  // --- LOG SYNC ALGORITHM ---
   function syncLogs(logs, mergedCuts) {
     if (mergedCuts.length === 0) return logs;
-    
     const newLogs = JSON.parse(JSON.stringify(logs));
     const categories = ['console', 'network', 'actions', 'backend'];
-    
     function getNewTime(oldTimeSec) {
       let totalCutBefore = 0;
       for (const cut of mergedCuts) {
-        if (oldTimeSec >= cut.end) {
-          totalCutBefore += (cut.end - cut.start);
-        } else if (oldTimeSec > cut.start && oldTimeSec < cut.end) {
-          return null; // Inside cut
-        }
+        if (oldTimeSec >= cut.end) totalCutBefore += (cut.end - cut.start);
+        else if (oldTimeSec > cut.start && oldTimeSec < cut.end) return null;
       }
       return Math.max(0, oldTimeSec - totalCutBefore);
     }
-
     categories.forEach(cat => {
       if (!newLogs[cat]) return;
       newLogs[cat] = newLogs[cat].map(item => {
@@ -431,64 +487,37 @@ document.addEventListener('DOMContentLoaded', () => {
         return item;
       }).filter(Boolean);
     });
-
-    // Process URL Timeline (Carefully)
+    // URL Timeline re-map
     if (newLogs.info && newLogs.info.urlTimeline) {
       let timeline = [];
       const originalTimeline = logs.info.urlTimeline || [];
-      
-      // Re-map URL timeline entries
       originalTimeline.forEach((item, idx) => {
         const oldT = (item.timeMs / 1000) || item.time || 0;
         const newT = getNewTime(oldT);
-        
-        if (newT !== null) {
-          timeline.push({ ...item, time: newT, timeMs: Math.round(newT * 1000) });
-        } else {
-          // Entry is inside a cut. 
-          // We need to see if this URL is still the "current" one when we exit the cut.
-          // Find the end of this cut
+        if (newT !== null) timeline.push({ ...item, time: newT, timeMs: Math.round(newT * 1000) });
+        else {
           const currentCut = mergedCuts.find(c => oldT >= c.start && oldT <= c.end);
           const nextEntry = originalTimeline[idx + 1];
           const nextEntryTime = nextEntry ? ((nextEntry.timeMs / 1000) || nextEntry.time) : Infinity;
-          
           if (nextEntryTime > currentCut.end) {
-            // This URL remains active after the cut ends.
-            // We should add an entry at the very beginning of the post-cut segment.
             const newTPostCut = getNewTime(currentCut.end);
             timeline.push({ ...item, time: newTPostCut, timeMs: Math.round(newTPostCut * 1000) });
           }
         }
       });
-
-      // Filter duplicates and sort
       timeline.sort((a,b) => a.time - b.time);
-      
-      const uniqueTimeline = [];
+      const unique = [];
       timeline.forEach(entry => {
-        const last = uniqueTimeline[uniqueTimeline.length - 1];
-        if (!last || last.url !== entry.url) {
-          uniqueTimeline.push(entry);
-        } else if (last && last.url === entry.url) {
-          // Keep the earliest time for the same URL
-          if (entry.time < last.time) last.time = entry.time;
-        }
+        const last = unique[unique.length - 1];
+        if (!last || last.url !== entry.url) unique.push(entry);
       });
-
-      // Ensure start at t=0
-      if (uniqueTimeline.length > 0) {
-        uniqueTimeline[0].time = 0;
-        uniqueTimeline[0].timeMs = 0;
-      }
-
-      newLogs.info.urlTimeline = uniqueTimeline;
-      if (uniqueTimeline.length > 0) newLogs.info.url = uniqueTimeline[0].url;
+      if (unique.length > 0) { unique[0].time = 0; unique[0].timeMs = 0; }
+      newLogs.info.urlTimeline = unique;
+      if (unique.length > 0) newLogs.info.url = unique[0].url;
     }
-
     return newLogs;
   }
 
-  // --- HELPERS ---
   function formatTime(sec) {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60).toString().padStart(2, '0');
@@ -498,17 +527,13 @@ document.addEventListener('DOMContentLoaded', () => {
   function parseSec(timeStr) {
     if (!timeStr) return 0;
     const match = timeStr.match(/\[(\d+):(\d+)\]/);
-    if (match) return parseInt(match[1]) * 60 + parseInt(match[2]);
-    return 0;
+    return match ? parseInt(match[1]) * 60 + parseInt(match[2]) : 0;
   }
 
   document.getElementById('btnCancel').addEventListener('click', () => {
-    if (confirm("Discard changes and return to review?")) {
-      window.location.href = 'review.html';
-    }
+    if (confirm("Discard changes?")) window.location.href = 'review.html';
   });
 
-  // Color selection
   document.querySelectorAll('.color-swatch').forEach(sw => {
     sw.addEventListener('click', () => {
       document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
@@ -516,10 +541,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Stroke width display update
-  const strokeSlider = document.getElementById('propStrokeWidth');
-  const strokeVal = document.getElementById('valStrokeWidth');
-  strokeSlider.addEventListener('input', () => {
-    strokeVal.textContent = strokeSlider.value;
+  document.getElementById('propStrokeWidth').addEventListener('input', (e) => {
+    document.getElementById('valStrokeWidth').textContent = e.target.value;
   });
 });

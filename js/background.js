@@ -396,7 +396,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     if (!chrome.runtime.lastError) {
                       chrome.tabs.sendMessage(targetTab.id, { 
                         action: 'SHOW_WIDGET', 
-                        startTime: elapsed, 
+                        startTime: 0, 
                         isPaused: isPaused 
                       }).catch(() => {});
                     }
@@ -454,19 +454,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   // 3. Review & Upload
   else if (request.action === 'GET_PENDING_VIDEO') {
-    if (pendingVideoBase64) {
+    // Try IndexedDB first (most reliable for edited/large videos)
+    getVideoFromDB().then(blob => {
+      if (blob) {
+        const reader = new FileReader();
+        reader.onload = () => sendResponse({ videoBase64: reader.result.split(',')[1] });
+        reader.readAsDataURL(blob);
+      } else if (pendingVideoBase64) {
+        sendResponse({ videoBase64: pendingVideoBase64 });
+      } else {
+        chrome.storage.local.get(['pendingVideo'], (res) => {
+          sendResponse({ videoBase64: res.pendingVideo });
+        });
+      }
+    }).catch(() => {
       sendResponse({ videoBase64: pendingVideoBase64 });
-    } else {
-      chrome.storage.local.get(['pendingVideo'], (res) => {
-        sendResponse({ videoBase64: res.pendingVideo });
-      });
-      return true; // async
-    }
+    });
+    return true; // async
   } 
   
   else if (request.action === 'SAVE_PENDING_VIDEO') {
-    pendingVideoBase64 = request.videoBase64;
-    chrome.storage.local.set({ pendingVideo: request.videoBase64 });
+    if (request.useDB) {
+      // Data is already in IndexedDB, just clear memory cache
+      pendingVideoBase64 = null;
+    } else {
+      pendingVideoBase64 = request.videoBase64;
+      chrome.storage.local.set({ pendingVideo: request.videoBase64 });
+    }
     sendResponse({ success: true });
   }
   
@@ -594,7 +608,30 @@ async function commitUpload(title, desc, videoBase64, infoData) {
     logs: logsData
   }, null, 2)], {type: 'application/json'});
   
-  const videoBlob = await (await fetch(`data:video/webm;base64,${videoBase64}`)).blob();
+  // 2. Persist to Drive
+  let videoBlob;
+  try {
+    const dbBlob = await getVideoFromDB();
+    if (dbBlob) {
+      videoBlob = dbBlob;
+    } else {
+      // Fallback to memory base64
+      const byteCharacters = atob(videoBase64);
+      const byteArray = new Uint8Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteArray[i] = byteCharacters.charCodeAt(i);
+      }
+      videoBlob = new Blob([byteArray], {type: 'video/webm'});
+    }
+  } catch (err) {
+    console.error("DB Fetch failed, falling back:", err);
+    const byteCharacters = atob(videoBase64);
+    const byteArray = new Uint8Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteArray[i] = byteCharacters.charCodeAt(i);
+    }
+    videoBlob = new Blob([byteArray], {type: 'video/webm'});
+  }
 
   const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
   const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, '_');
@@ -611,9 +648,43 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   resetLogs();
   pendingVideoBase64 = null;
   chrome.storage.local.remove(['pendingVideo', 'pendingReport']);
+  await clearVideoFromDB();
   
   // Return Hosted Player Web App URL (Netlify Public Link)
   return `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoFileId}&l=${jsonFileId}`;
+}
+
+async function getVideoFromDB() {
+  return new Promise((resolve) => {
+    const request = indexedDB.open("TRACE_Storage", 1);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
+    };
+    request.onsuccess = (e) => {
+      const db = e.target.result;
+      const transaction = db.transaction("videos", "readonly");
+      const store = transaction.objectStore("videos");
+      const getRequest = store.get("pendingVideo");
+      getRequest.onsuccess = () => resolve(getRequest.result);
+      getRequest.onerror = () => resolve(null);
+    };
+    request.onerror = () => resolve(null);
+  });
+}
+
+async function clearVideoFromDB() {
+  return new Promise((resolve) => {
+    const request = indexedDB.open("TRACE_Storage", 1);
+    request.onsuccess = (e) => {
+      const db = e.target.result;
+      const transaction = db.transaction("videos", "readwrite");
+      const store = transaction.objectStore("videos");
+      store.delete("pendingVideo");
+      transaction.oncomplete = () => resolve();
+    };
+    request.onerror = () => resolve();
+  });
 }
 
 async function getOrCreateFolder(token, folderName) {
@@ -644,33 +715,44 @@ async function getOrCreateFolder(token, folderName) {
 }
 
 async function uploadFileToDrive(token, filename, mimeType, fileBlob, folderId) {
+  // 1. Create file metadata
   const metadata = {
     name: filename,
     mimeType: mimeType,
     parents: [folderId]
   };
 
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', fileBlob);
-
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${token}`
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
     },
-    body: form
+    body: JSON.stringify(metadata)
   });
   
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error("Upload failed:", errText);
-    throw new Error(`Google Drive upload failed: ${res.status} ${errText}`);
+  if (!createRes.ok) {
+    throw new Error(`Failed to create file metadata: ${createRes.status} ${await createRes.text()}`);
   }
   
-  const json = await res.json();
-  if (!json.id) throw new Error("Upload succeeded but no File ID was returned");
-  return json.id; // File ID
+  const fileData = await createRes.json();
+  const fileId = fileData.id;
+
+  // 2. Upload file content (Simple Media Upload - supports up to 5TB)
+  const uploadRes = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': mimeType
+    },
+    body: fileBlob
+  });
+
+  if (!uploadRes.ok) {
+    throw new Error(`Failed to upload file content: ${uploadRes.status} ${await uploadRes.text()}`);
+  }
+
+  return fileId;
 }
 
 async function makeFilePublic(token, fileId) {
