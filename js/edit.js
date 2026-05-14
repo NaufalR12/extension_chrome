@@ -1,5 +1,5 @@
 /**
- * T.R.A.C.E Video Editor Logic
+ * BERIBUG Video Editor Logic
  * Handles video processing, drawing, cutting, and log synchronization.
  */
 

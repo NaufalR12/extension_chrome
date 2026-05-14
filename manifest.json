@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "T.R.A.C.E",
+  "name": "BERIBUG",
   "version": "1.0.0",
   "description": "Tracking & Reporting for Application Crash & Errors",
   "permissions": [
@@ -29,7 +29,7 @@
   },
   "action": {
     "default_popup": "html/popup.html",
-    "default_title": "Open T.R.A.C.E"
+    "default_title": "Open BERIBUG"
   },
   "content_scripts": [
     {
@@ -45,7 +45,7 @@
     }
   ],
   "oauth2": {
-    "client_id": "1061102325924-e59pl3dmo0646r2sqoadqvlr184knf9g.apps.googleusercontent.com",
+    "client_id": "1061102325924-3immmr4ma8f31hdumapkfasg2am6dnr4.apps.googleusercontent.com", 
     "scopes": [
       "https://www.googleapis.com/auth/drive.file"
     ]
