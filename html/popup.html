@@ -30,7 +30,7 @@
 
     <!-- Main State -->
     <div id="mainSection" class="section hidden">
-      <div class="action-grid">
+      <div id="mainActions" class="action-grid">
         <button id="btnRecord" class="action-card">
           <div class="card-icon blue">🎥</div>
           <div class="card-label">Record</div>
@@ -49,6 +49,30 @@
           <div class="card-icon gray">📋</div>
           <div class="card-label">Dashboard</div>
         </button>
+      </div>
+
+      <!-- Screenshot Mode (inside popup) -->
+      <div id="screenshotSection" class="section hidden">
+        <h2>Screenshot</h2>
+        <p>Pilih mode screenshot:</p>
+        <div class="action-grid">
+          <button id="btnShotArea" class="action-card">
+            <div class="card-icon purple">✂️</div>
+            <div class="card-label">Area</div>
+          </button>
+          <button id="btnShotFull" class="action-card">
+            <div class="card-icon purple">📄</div>
+            <div class="card-label">Full Page</div>
+          </button>
+          <button id="btnShotScroll" class="action-card">
+            <div class="card-icon purple">📜</div>
+            <div class="card-label">Scroll</div>
+          </button>
+          <button id="btnShotBack" class="action-card">
+            <div class="card-icon gray">↩️</div>
+            <div class="card-label">Kembali</div>
+          </button>
+        </div>
       </div>
 
       <div class="settings-divider">

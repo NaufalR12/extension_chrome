@@ -3,12 +3,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const loginSection = document.getElementById('loginSection');
   const mainSection = document.getElementById('mainSection');
   const userStatusWrapper = document.getElementById('userStatusWrapper');
+  const mainActions = document.getElementById('mainActions');
+  const screenshotSection = document.getElementById('screenshotSection');
   
   const btnLogin = document.getElementById('btnLogin');
   const btnRecord = document.getElementById('btnRecord');
   const btnStop = document.getElementById('btnStop');
   const btnScreenshot = document.getElementById('btnScreenshot');
   const btnDashboard = document.getElementById('btnDashboard');
+
+  const btnShotArea = document.getElementById('btnShotArea');
+  const btnShotFull = document.getElementById('btnShotFull');
+  const btnShotScroll = document.getElementById('btnShotScroll');
+  const btnShotBack = document.getElementById('btnShotBack');
 
   const btnSaveSettings = document.getElementById('btnSaveSettings');
   const inputAutoDelete = document.getElementById('inputAutoDelete');
@@ -37,10 +44,55 @@ document.addEventListener('DOMContentLoaded', () => {
     chrome.tabs.create({ url: chrome.runtime.getURL('html/home.html') });
   });
 
-  // Screenshot Button (Placeholder)
+  function showMainActions() {
+    screenshotSection.classList.add('hidden');
+    mainActions.classList.remove('hidden');
+  }
+
+  function showScreenshotModes() {
+    mainActions.classList.add('hidden');
+    screenshotSection.classList.remove('hidden');
+  }
+
+  // Screenshot Button (show modes inside popup)
   btnScreenshot.addEventListener('click', () => {
-    alert("Screenshot feature is coming soon!");
+    showScreenshotModes();
   });
+
+  btnShotBack.addEventListener('click', showMainActions);
+
+  async function startScreenshot(mode) {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabsList) => {
+      if (!tabsList || tabsList.length === 0) {
+        alert('Tidak ada tab aktif.');
+        return;
+      }
+      const tab = tabsList[0];
+      chrome.runtime.sendMessage(
+        {
+          action: 'START_SCREENSHOT',
+          mode,
+          tabId: tab.id
+        },
+        (res) => {
+          if (chrome.runtime.lastError) {
+            alert('Gagal memulai screenshot: ' + chrome.runtime.lastError.message);
+            return;
+          }
+          if (res && res.ok) {
+            // Popup akan otomatis tertutup saat user klik halaman.
+            window.close();
+          } else {
+            alert('Gagal memulai screenshot.');
+          }
+        }
+      );
+    });
+  }
+
+  btnShotArea.addEventListener('click', () => startScreenshot('area'));
+  btnShotFull.addEventListener('click', () => startScreenshot('full'));
+  btnShotScroll.addEventListener('click', () => startScreenshot('scroll'));
 
   // Check Auth Status
   function checkAuth() {

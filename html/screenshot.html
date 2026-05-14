@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>BERIBUG - Screenshot</title>
+  <link rel="stylesheet" href="../css/screenshot.css">
+</head>
+<body>
+  <!-- Mode Selection Screen -->
+  <div id="modeSelector" class="screen active">
+    <div class="mode-container">
+      <h1>📸 Pilih Mode Screenshot</h1>
+      <p>Pilih jenis screenshot yang ingin Anda buat:</p>
+      
+      <div class="mode-buttons">
+        <button id="btnAreaSelect" class="mode-btn">
+          <div class="mode-icon">✂️</div>
+          <div class="mode-title">Area Selection</div>
+          <div class="mode-desc">Pilih area yang ingin di-screenshot seperti Snipping Tools</div>
+        </button>
+
+        <button id="btnFullPage" class="mode-btn">
+          <div class="mode-icon">📄</div>
+          <div class="mode-title">Full Page</div>
+          <div class="mode-desc">Screenshot seluruh halaman saat ini</div>
+        </button>
+
+        <button id="btnScrollPage" class="mode-btn">
+          <div class="mode-icon">📜</div>
+          <div class="mode-title">Scroll Screenshot</div>
+          <div class="mode-desc">Screenshot halaman penuh dengan scroll (seperti di HP)</div>
+        </button>
+
+        <button id="btnCancel" class="mode-btn cancel">
+          <div class="mode-icon">❌</div>
+          <div class="mode-title">Batal</div>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Area Selection Screen -->
+  <div id="areaSelector" class="screen">
+    <div class="selection-overlay" id="selectionOverlay">
+      <canvas id="selectionCanvas"></canvas>
+      <div class="instruction-box">
+        <p>📍 Seret untuk memilih area yang ingin di-screenshot</p>
+      </div>
+    </div>
+    
+    <div class="selection-toolbar">
+      <button id="btnCancelArea" class="btn btn-secondary">Batal</button>
+      <div class="area-info">
+        <span id="areaCoords">Pilih Area: 0x0</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Preview & Download Screen -->
+  <div id="previewScreen" class="screen">
+    <div class="preview-header">
+      <h2>📸 Preview Screenshot</h2>
+      <button id="btnClosePreview" class="close-btn">✕</button>
+    </div>
+
+    <div class="preview-container">
+      <img id="previewImage" class="preview-image" src="" alt="Preview">
+    </div>
+
+    <div class="preview-actions">
+      <div class="action-group">
+        <label for="screenshotTitle">Judul:</label>
+        <input type="text" id="screenshotTitle" placeholder="Contoh: Bug Login Error" value="Screenshot">
+      </div>
+
+      <div class="button-group">
+        <button id="btnDownload" class="btn btn-primary">
+          <span>⬇️</span> Download
+        </button>
+        
+        <button id="btnSaveToDrive" class="btn btn-success">
+          <span>☁️</span> Simpan ke Drive
+        </button>
+
+        <button id="btnRetake" class="btn btn-secondary">
+          <span>🔄</span> Ulang
+        </button>
+      </div>
+    </div>
+
+    <!-- Upload Status -->
+    <div id="uploadStatus" class="upload-status hidden">
+      <div class="status-content">
+        <div id="statusIcon" class="status-icon">⏳</div>
+        <p id="statusText">Uploading...</p>
+        <div id="statusProgress" class="progress-bar">
+          <div id="statusProgressFill" class="progress-fill"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Success Message -->
+    <div id="successMessage" class="success-message hidden">
+      <div class="message-content">
+        <div class="success-icon">✅</div>
+        <h3>Screenshot Tersimpan!</h3>
+        <p id="successText">Screenshot berhasil disimpan ke Google Drive</p>
+        <button id="btnViewInDrive" class="btn btn-primary">Lihat di My Reports</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Loading Screen -->
+  <div id="loadingScreen" class="screen">
+    <div class="loading-container">
+      <div class="spinner"></div>
+      <p id="loadingText">Memproses screenshot...</p>
+    </div>
+  </div>
+
+  <script src="../js/screenshot.js"></script>
+</body>
+</html>

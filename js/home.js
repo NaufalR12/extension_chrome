@@ -123,7 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const files = json.files || [];
 
       // 3. Group by Timestamp
-      // Expected name format: Bug_SanitizedTitle_TIMESTAMP.webm / .json
+      // Expected name format: BERIBUG_SanitizedTitle_TIMESTAMP.(webm|png|json)
       const bugMap = {};
 
       files.forEach(f => {
@@ -140,12 +140,13 @@ document.addEventListener('DOMContentLoaded', () => {
             bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdTime) };
           }
           if (ext === 'webm') bugMap[ts].videoFile = f;
+          if (ext === 'png') bugMap[ts].imageFile = f;
           if (ext === 'json') bugMap[ts].jsonFile = f;
         }
       });
 
       const bugsArray = Object.values(bugMap)
-        .filter(b => b.videoFile && b.jsonFile)
+        .filter(b => (b.videoFile || b.imageFile) && b.jsonFile)
         .sort((a,b) => b.date - a.date);
 
       if (bugsArray.length === 0) {
@@ -164,28 +165,37 @@ document.addEventListener('DOMContentLoaded', () => {
         dateTd.textContent = bug.date.toLocaleString();
 
         const assetsTd = document.createElement('td');
-        assetsTd.textContent = "Video + JSON";
+        assetsTd.textContent = bug.videoFile ? "Video + JSON" : "Screenshot + JSON";
         
         const actionTd = document.createElement('td');
         actionTd.className = 'actions';
-        
-        const btnPlay = document.createElement('button');
-        btnPlay.className = 'btn secondary btn-small';
-        btnPlay.textContent = 'Play';
-        btnPlay.onclick = () => window.open(`https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${bug.videoFile.id}&l=${bug.jsonFile.id}`, '_blank');
-        
-        const btnEdit = document.createElement('button');
-        btnEdit.className = 'btn primary btn-small';
-        btnEdit.textContent = 'Edit';
-        btnEdit.onclick = () => window.open(`review.html?v=${bug.videoFile.id}&l=${bug.jsonFile.id}&edit=true`, '_blank');
+
+        if (bug.videoFile) {
+          const btnPlay = document.createElement('button');
+          btnPlay.className = 'btn secondary btn-small';
+          btnPlay.textContent = 'Play';
+          btnPlay.onclick = () => window.open(`https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${bug.videoFile.id}&l=${bug.jsonFile.id}`, '_blank');
+
+          const btnEdit = document.createElement('button');
+          btnEdit.className = 'btn primary btn-small';
+          btnEdit.textContent = 'Edit';
+          btnEdit.onclick = () => window.open(`review.html?v=${bug.videoFile.id}&l=${bug.jsonFile.id}&edit=true`, '_blank');
+
+          actionTd.appendChild(btnPlay);
+          actionTd.appendChild(btnEdit);
+        } else if (bug.imageFile) {
+          const btnOpen = document.createElement('button');
+          btnOpen.className = 'btn secondary btn-small';
+          btnOpen.textContent = 'Open';
+          btnOpen.onclick = () => window.open(`https://drive.google.com/file/d/${bug.imageFile.id}/view`, '_blank');
+          actionTd.appendChild(btnOpen);
+        }
 
         const btnDel = document.createElement('button');
         btnDel.className = 'btn danger btn-small';
         btnDel.textContent = 'Delete';
         btnDel.onclick = () => openDeleteModal(bug);
 
-        actionTd.appendChild(btnPlay);
-        actionTd.appendChild(btnEdit);
         actionTd.appendChild(btnDel);
 
         tr.appendChild(titleTd);
@@ -246,6 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
             bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdTime) };
           }
           if (ext === 'webm') bugMap[ts].videoFile = f;
+          if (ext === 'png') bugMap[ts].imageFile = f;
           if (ext === 'json') bugMap[ts].jsonFile = f;
         }
       });
@@ -270,7 +281,12 @@ document.addEventListener('DOMContentLoaded', () => {
         dateTd.textContent = bug.date.toLocaleString();
 
         const assetsTd = document.createElement('td');
-        assetsTd.textContent = (bug.videoFile && bug.jsonFile) ? "Video + JSON" : (bug.jsonFile ? "JSON Only" : "Video Only");
+        if (bug.videoFile && bug.jsonFile) assetsTd.textContent = "Video + JSON";
+        else if (bug.imageFile && bug.jsonFile) assetsTd.textContent = "Screenshot + JSON";
+        else if (bug.jsonFile) assetsTd.textContent = "JSON Only";
+        else if (bug.videoFile) assetsTd.textContent = "Video Only";
+        else if (bug.imageFile) assetsTd.textContent = "Screenshot Only";
+        else assetsTd.textContent = "Unknown";
         
         const actionTd = document.createElement('td');
         actionTd.className = 'actions';
@@ -329,6 +345,13 @@ document.addEventListener('DOMContentLoaded', () => {
           body: JSON.stringify({ trashed: false })
         });
       }
+      if (bug.imageFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.imageFile.id}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trashed: false })
+        });
+      }
       alert("Report restored.");
       loadTrash();
     } catch (err) {
@@ -348,6 +371,12 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       if (bug.videoFile) {
         await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+      }
+      if (bug.imageFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.imageFile.id}`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${authToken}` }
         });
@@ -392,12 +421,21 @@ document.addEventListener('DOMContentLoaded', () => {
         headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ trashed: true })
       });
-      // Move Video to trash
-      await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trashed: true })
-      });
+      // Move Video/Image to trash
+      if (bug.videoFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trashed: true })
+        });
+      }
+      if (bug.imageFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.imageFile.id}`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trashed: true })
+        });
+      }
 
       deleteModal.classList.add('hidden');
       btnConfirmTrash.textContent = "🗑️ Move to Trash (Safe)";
@@ -424,11 +462,19 @@ document.addEventListener('DOMContentLoaded', () => {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      // Delete Video permanently
-      await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
+      // Delete Video/Image permanently
+      if (bug.videoFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+      }
+      if (bug.imageFile) {
+        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.imageFile.id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+      }
 
       deleteModal.classList.add('hidden');
       btnConfirmPermanent.textContent = "🔥 Delete Permanently (Irreversible)";

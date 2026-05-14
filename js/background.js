@@ -332,6 +332,175 @@ async function setupOffscreenDocument(path) {
 // Global accessor for review page to fetch
 let pendingVideoBase64 = null;
 
+// ==================== SCREENSHOT PIPELINE (MV3 SERVICE WORKER) ====================
+// Flow:
+// - Popup sends START_SCREENSHOT {mode, tabId}
+// - For area: content script shows overlay, then sends SCREENSHOT_AREA_RESULT
+// - For full/scroll: background scrolls tab + captureVisibleTab segments, stitches
+// - Result is stored in chrome.storage.local.pendingScreenshot then screenshot.html is opened
+
+let activeScreenshotFlow = null; // { mode, tabId, startedAt }
+
+function openScreenshotError(message) {
+  const msg = encodeURIComponent(String(message || 'Screenshot gagal'));
+  chrome.tabs.create({ url: chrome.runtime.getURL(`html/screenshot.html#error=${msg}`) });
+}
+
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+async function ensureTabActive(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  await chrome.tabs.update(tabId, { active: true });
+  return tab;
+}
+
+async function captureVisibleTabForTab(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  // captureVisibleTab captures the active tab in a window.
+  // Ensure our target tab is active before calling.
+  await chrome.tabs.update(tabId, { active: true });
+  return await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+}
+
+async function dataUrlToBlob(dataUrl) {
+  const res = await fetch(dataUrl);
+  return await res.blob();
+}
+
+async function blobToDataUrl(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const base64 = btoa(binary);
+  return `data:${blob.type};base64,${base64}`;
+}
+
+async function cropDataUrl(dataUrl, cropPx) {
+  if (typeof OffscreenCanvas === 'undefined') {
+    throw new Error('OffscreenCanvas not available for cropping');
+  }
+  const blob = await dataUrlToBlob(dataUrl);
+  const bmp = await createImageBitmap(blob);
+
+  const x = Math.max(0, Math.min(cropPx.x, bmp.width - 1));
+  const y = Math.max(0, Math.min(cropPx.y, bmp.height - 1));
+  const w = Math.max(1, Math.min(cropPx.width, bmp.width - x));
+  const h = Math.max(1, Math.min(cropPx.height, bmp.height - y));
+
+  const canvas = new OffscreenCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(
+    bmp,
+    x,
+    y,
+    w,
+    h,
+    0,
+    0,
+    w,
+    h
+  );
+  const outBlob = await canvas.convertToBlob({ type: 'image/png' });
+  return await blobToDataUrl(outBlob);
+}
+
+async function stitchVerticalDataUrls(dataUrls, segmentHeightsPx, totalWidthPx, totalHeightPx) {
+  if (typeof OffscreenCanvas === 'undefined') {
+    throw new Error('OffscreenCanvas not available for stitching');
+  }
+  const canvas = new OffscreenCanvas(totalWidthPx, totalHeightPx);
+  const ctx = canvas.getContext('2d');
+
+  let offsetY = 0;
+  for (let i = 0; i < dataUrls.length; i++) {
+    const blob = await dataUrlToBlob(dataUrls[i]);
+    const bmp = await createImageBitmap(blob);
+    const drawH = segmentHeightsPx[i];
+    ctx.drawImage(bmp, 0, 0, totalWidthPx, drawH, 0, offsetY, totalWidthPx, drawH);
+    offsetY += drawH;
+  }
+
+  const outBlob = await canvas.convertToBlob({ type: 'image/png' });
+  return await blobToDataUrl(outBlob);
+}
+
+async function openScreenshotPreview(meta, imageDataUrl) {
+  await chrome.storage.local.set({
+    pendingScreenshot: {
+      meta,
+      imageDataUrl,
+      createdAt: Date.now()
+    }
+  });
+  await chrome.tabs.create({ url: chrome.runtime.getURL('html/screenshot.html') });
+}
+
+async function captureFullOrScroll(tabId, mode) {
+  // mode: 'full' | 'scroll'
+  await ensureTabActive(tabId);
+  const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
+  if (!metrics || !metrics.viewportHeight) throw new Error('Tidak bisa mengambil ukuran halaman');
+
+  const dpr = metrics.devicePixelRatio || 1;
+  const startY = mode === 'full' ? 0 : (metrics.scrollY || 0);
+  const endY = metrics.scrollHeight;
+
+  const viewportH = metrics.viewportHeight;
+  const viewportW = metrics.viewportWidth;
+
+  const steps = [];
+  for (let y = startY; y < endY; y += viewportH) {
+    steps.push(y);
+  }
+
+  // Scroll + capture each segment
+  const captured = [];
+  const segHeightsPx = [];
+
+  // Capture first image to determine actual pixel width/height
+  for (let i = 0; i < steps.length; i++) {
+    const y = steps[i];
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
+    await sleep(220);
+    const dataUrl = await captureVisibleTabForTab(tabId);
+    captured.push(dataUrl);
+
+    const remainingCss = Math.max(0, Math.min(viewportH, endY - y));
+    const drawHPx = Math.round(remainingCss * dpr);
+    segHeightsPx.push(drawHPx);
+  }
+
+  // Determine widthPx from first captured bitmap
+  const firstBlob = await dataUrlToBlob(captured[0]);
+  const firstBmp = await createImageBitmap(firstBlob);
+  const widthPx = firstBmp.width;
+
+  const totalHeightCss = Math.max(0, endY - startY);
+  const totalHeightPx = Math.round(totalHeightCss * dpr);
+
+  // Safety: avoid too large canvas
+  if (totalHeightPx > 30000 || widthPx > 30000) {
+    throw new Error('Halaman terlalu panjang/besar untuk di-stitch. Coba area selection atau bagian tertentu.');
+  }
+
+  const stitched = await stitchVerticalDataUrls(captured, segHeightsPx, widthPx, totalHeightPx);
+
+  // Restore original scroll
+  await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: metrics.scrollY || 0 });
+  await sleep(120);
+
+  const meta = {
+    type: 'screenshot',
+    mode,
+    tabId,
+    capturedAt: new Date().toISOString()
+  };
+  await openScreenshotPreview(meta, stitched);
+}
+
 // Unified message listener
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 0. Save environment snapshot
@@ -488,6 +657,103 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     commitUpload(request.title, request.description, pendingVideoBase64, request.info)
       .then(url => sendResponse({ success: true, url }))
       .catch(err => sendResponse({ success: false, error: err.toString() }));
+    return true;
+  }
+
+  // ==================== SCREENSHOT ENTRYPOINT ====================
+  else if (request.action === 'START_SCREENSHOT') {
+    const mode = request.mode;
+    const tabId = request.tabId;
+
+    (async () => {
+      try {
+        if (!tabId || !mode) {
+          sendResponse({ ok: false, error: 'Missing tabId/mode' });
+          return;
+        }
+
+        activeScreenshotFlow = { mode, tabId, startedAt: Date.now() };
+
+        if (mode === 'area') {
+          await ensureTabActive(tabId);
+          try {
+            await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_START_AREA_SELECT' });
+            // Only close popup when overlay successfully started.
+            sendResponse({ ok: true });
+          } catch (e) {
+            activeScreenshotFlow = null;
+            const msg = 'Tidak bisa memulai area selection. Coba refresh tab setelah reload extension (atau halaman ini memang tidak mengizinkan content script).';
+            openScreenshotError(msg);
+            sendResponse({ ok: false, error: msg });
+          }
+          return;
+        }
+
+        // full/scroll runs async; reply OK so popup can close
+        sendResponse({ ok: true });
+
+        if (mode === 'full' || mode === 'scroll') {
+          await captureFullOrScroll(tabId, mode);
+        } else {
+          throw new Error('Mode screenshot tidak dikenal');
+        }
+
+      } catch (e) {
+        console.error('START_SCREENSHOT failed:', e);
+        openScreenshotError(e?.message || String(e));
+      } finally {
+        if (mode !== 'area') activeScreenshotFlow = null;
+      }
+    })();
+
+    return true;
+  }
+
+  // Result from page overlay selection
+  else if (request.action === 'SCREENSHOT_AREA_RESULT') {
+    (async () => {
+      try {
+        if (!activeScreenshotFlow || activeScreenshotFlow.mode !== 'area') return;
+        const tabId = activeScreenshotFlow.tabId;
+
+        if (request.canceled) {
+          activeScreenshotFlow = null;
+          return;
+        }
+
+        const rect = request.rect;
+        const metrics = request.metrics;
+        if (!rect || !metrics) throw new Error('Area selection data missing');
+
+        await ensureTabActive(tabId);
+        await sleep(80);
+
+        const dataUrl = await captureVisibleTabForTab(tabId);
+        const dpr = metrics.devicePixelRatio || 1;
+        const cropPx = {
+          x: Math.round(rect.x * dpr),
+          y: Math.round(rect.y * dpr),
+          width: Math.round(rect.width * dpr),
+          height: Math.round(rect.height * dpr)
+        };
+
+        const cropped = await cropDataUrl(dataUrl, cropPx);
+        const meta = {
+          type: 'screenshot',
+          mode: 'area',
+          tabId,
+          capturedAt: new Date().toISOString()
+        };
+        await openScreenshotPreview(meta, cropped);
+      } catch (e) {
+        console.error('SCREENSHOT_AREA_RESULT failed:', e);
+        openScreenshotError(e?.message || String(e));
+      } finally {
+        activeScreenshotFlow = null;
+      }
+    })();
+
+    sendResponse({ ok: true });
     return true;
   }
 

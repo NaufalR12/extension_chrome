@@ -228,6 +228,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     sendResponse({ ok: true });
   } else if (request.action === 'BUGLENS_GET_STORAGE') {
     sendResponse(getStorageSnapshot());
+  } else if (request.action === 'SCREENSHOT_GET_METRICS') {
+    sendResponse(getScreenshotMetrics());
+  } else if (request.action === 'SCREENSHOT_SCROLL_TO') {
+    scrollToY(request.y).then(() => sendResponse({ ok: true, y: window.scrollY })).catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  } else if (request.action === 'SCREENSHOT_START_AREA_SELECT') {
+    startAreaSelectionOverlay();
+    sendResponse({ ok: true });
   }
 });
 
@@ -244,6 +252,147 @@ function getStorageSnapshot() {
   }
   return { localStorage: ls, sessionStorage: ss };
 }
+
+// ==================== SCREENSHOT HELPERS (CONTENT SCRIPT) ====================
+
+function getScreenshotMetrics() {
+  const docEl = document.documentElement;
+  return {
+    scrollHeight: Math.max(docEl.scrollHeight, document.body ? document.body.scrollHeight : 0),
+    scrollWidth: Math.max(docEl.scrollWidth, document.body ? document.body.scrollWidth : 0),
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
+    devicePixelRatio: window.devicePixelRatio || 1,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY
+  };
+}
+
+function scrollToY(y) {
+  return new Promise((resolve) => {
+    try {
+      // 'instant' is not a valid ScrollBehavior in Chrome; use 'auto'.
+      window.scrollTo({ top: y, left: 0, behavior: 'auto' });
+    } catch (_) {
+      window.scrollTo(0, y);
+    }
+    requestAnimationFrame(() => setTimeout(() => resolve(), 140));
+  });
+}
+
+let __beribugShotOverlay = null;
+
+function startAreaSelectionOverlay() {
+  if (__beribugShotOverlay) return;
+
+  const overlay = document.createElement('div');
+  __beribugShotOverlay = overlay;
+  overlay.style.position = 'fixed';
+  overlay.style.top = '0';
+  overlay.style.left = '0';
+  overlay.style.right = '0';
+  overlay.style.bottom = '0';
+  overlay.style.zIndex = '2147483647';
+  overlay.style.cursor = 'crosshair';
+  overlay.style.background = 'rgba(0,0,0,0.25)';
+  overlay.style.userSelect = 'none';
+
+  const hint = document.createElement('div');
+  hint.textContent = 'Silahkan pilih area untuk screenshot (drag). Tekan ESC untuk batal.';
+  hint.style.position = 'fixed';
+  hint.style.top = '16px';
+  hint.style.left = '50%';
+  hint.style.transform = 'translateX(-50%)';
+  hint.style.padding = '10px 14px';
+  hint.style.borderRadius = '10px';
+  hint.style.background = 'rgba(26,115,232,0.95)';
+  hint.style.color = '#fff';
+  hint.style.font = '600 13px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+  hint.style.boxShadow = '0 6px 18px rgba(0,0,0,0.25)';
+  overlay.appendChild(hint);
+
+  const box = document.createElement('div');
+  box.style.position = 'fixed';
+  box.style.border = '2px solid #1a73e8';
+  box.style.background = 'rgba(26,115,232,0.10)';
+  box.style.display = 'none';
+  box.style.borderRadius = '4px';
+  overlay.appendChild(box);
+
+  let start = null;
+
+  function cleanup() {
+    document.removeEventListener('keydown', onKeyDown, true);
+    overlay.remove();
+    __beribugShotOverlay = null;
+  }
+
+  function onKeyDown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      cleanup();
+      chrome.runtime.sendMessage({
+        action: 'SCREENSHOT_AREA_RESULT',
+        canceled: true
+      }).catch(() => {});
+    }
+  }
+
+  document.addEventListener('keydown', onKeyDown, true);
+
+  overlay.addEventListener('mousedown', (e) => {
+    start = { x: e.clientX, y: e.clientY };
+    box.style.display = 'block';
+    box.style.left = `${start.x}px`;
+    box.style.top = `${start.y}px`;
+    box.style.width = '0px';
+    box.style.height = '0px';
+  });
+
+  overlay.addEventListener('mousemove', (e) => {
+    if (!start) return;
+    const x1 = Math.min(start.x, e.clientX);
+    const y1 = Math.min(start.y, e.clientY);
+    const x2 = Math.max(start.x, e.clientX);
+    const y2 = Math.max(start.y, e.clientY);
+    box.style.left = `${x1}px`;
+    box.style.top = `${y1}px`;
+    box.style.width = `${x2 - x1}px`;
+    box.style.height = `${y2 - y1}px`;
+  });
+
+  overlay.addEventListener('mouseup', (e) => {
+    if (!start) return;
+    const x1 = Math.min(start.x, e.clientX);
+    const y1 = Math.min(start.y, e.clientY);
+    const x2 = Math.max(start.x, e.clientX);
+    const y2 = Math.max(start.y, e.clientY);
+    const w = x2 - x1;
+    const h = y2 - y1;
+
+    start = null;
+
+    if (w < 30 || h < 30) {
+      // keep overlay, let user retry
+      box.style.display = 'none';
+      return;
+    }
+
+    const metrics = getScreenshotMetrics();
+    cleanup();
+
+    chrome.runtime.sendMessage({
+      action: 'SCREENSHOT_AREA_RESULT',
+      canceled: false,
+      rect: { x: x1, y: y1, width: w, height: h },
+      metrics
+    }).catch(() => {});
+  });
+
+  document.documentElement.appendChild(overlay);
+}
+
+
 
 let widgetContainer = null;
 let timerInterval = null;
