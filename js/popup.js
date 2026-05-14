@@ -83,7 +83,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // Popup akan otomatis tertutup saat user klik halaman.
             window.close();
           } else {
-            alert('Gagal memulai screenshot.');
+            alert('Gagal memulai screenshot: ' + (res && res.error ? res.error : 'Unknown error'));
           }
         }
       );

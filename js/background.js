@@ -341,6 +341,9 @@ let pendingVideoBase64 = null;
 
 let activeScreenshotFlow = null; // { mode, tabId, startedAt }
 
+const CAPTURE_MIN_INTERVAL_MS = 1100; // be conservative to avoid quota
+const __lastCaptureAtByWindowId = new Map();
+
 function openScreenshotError(message) {
   const msg = encodeURIComponent(String(message || 'Screenshot gagal'));
   chrome.tabs.create({ url: chrome.runtime.getURL(`html/screenshot.html#error=${msg}`) });
@@ -350,10 +353,47 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+function isInjectableUrl(url) {
+  if (!url) return false;
+  return !(
+    url.startsWith('chrome://') ||
+    url.startsWith('chrome-extension://') ||
+    url.startsWith('edge://') ||
+    url.startsWith('about:')
+  );
+}
+
+async function ensureContentScript(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+  if (!isInjectableUrl(tab.url)) {
+    throw new Error('Halaman ini tidak mengizinkan screenshot dari extension (chrome://, edge://, atau halaman extension).');
+  }
+
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: 'BERIBUG_PING' });
+    return;
+  } catch (_) {
+    // Likely after extension reload or tab not refreshed.
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['js/content.js']
+    });
+    await sleep(50);
+    await chrome.tabs.sendMessage(tabId, { action: 'BERIBUG_PING' });
+  }
+}
+
 async function ensureTabActive(tabId) {
   const tab = await chrome.tabs.get(tabId);
   await chrome.tabs.update(tabId, { active: true });
   return tab;
+}
+
+async function throttleCapture(windowId) {
+  const last = __lastCaptureAtByWindowId.get(windowId) || 0;
+  const now = Date.now();
+  const wait = CAPTURE_MIN_INTERVAL_MS - (now - last);
+  if (wait > 0) await sleep(wait);
 }
 
 async function captureVisibleTabForTab(tabId) {
@@ -361,7 +401,28 @@ async function captureVisibleTabForTab(tabId) {
   // captureVisibleTab captures the active tab in a window.
   // Ensure our target tab is active before calling.
   await chrome.tabs.update(tabId, { active: true });
-  return await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+
+  const windowId = tab.windowId;
+  let attempt = 0;
+  let backoff = CAPTURE_MIN_INTERVAL_MS;
+  while (true) {
+    await throttleCapture(windowId);
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+      __lastCaptureAtByWindowId.set(windowId, Date.now());
+      return dataUrl;
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      // Typical error: "This request exceeds the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota."
+      if (/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i.test(msg) && attempt < 5) {
+        attempt += 1;
+        await sleep(backoff);
+        backoff = Math.min(backoff * 1.6, 4000);
+        continue;
+      }
+      throw e;
+    }
+  }
 }
 
 async function dataUrlToBlob(dataUrl) {
@@ -438,14 +499,14 @@ async function openScreenshotPreview(meta, imageDataUrl) {
   await chrome.tabs.create({ url: chrome.runtime.getURL('html/screenshot.html') });
 }
 
-async function captureFullOrScroll(tabId, mode) {
-  // mode: 'full' | 'scroll'
+async function captureFull(tabId) {
   await ensureTabActive(tabId);
+  await ensureContentScript(tabId);
   const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
   if (!metrics || !metrics.viewportHeight) throw new Error('Tidak bisa mengambil ukuran halaman');
 
   const dpr = metrics.devicePixelRatio || 1;
-  const startY = mode === 'full' ? 0 : (metrics.scrollY || 0);
+  const startY = 0;
   const endY = metrics.scrollHeight;
 
   const viewportH = metrics.viewportHeight;
@@ -494,7 +555,90 @@ async function captureFullOrScroll(tabId, mode) {
 
   const meta = {
     type: 'screenshot',
-    mode,
+    mode: 'full',
+    tabId,
+    capturedAt: new Date().toISOString()
+  };
+  await openScreenshotPreview(meta, stitched);
+}
+
+async function captureScrollInteractive(tabId) {
+  await ensureTabActive(tabId);
+  await ensureContentScript(tabId);
+
+  // Show stop UI in page
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_START' });
+  } catch (_) {
+    // ignore
+  }
+
+  const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
+  if (!metrics || !metrics.viewportHeight) throw new Error('Tidak bisa mengambil ukuran halaman');
+
+  const dpr = metrics.devicePixelRatio || 1;
+  const startY = metrics.scrollY || 0;
+  const endY = metrics.scrollHeight;
+  const viewportH = metrics.viewportHeight;
+
+  const captured = [];
+  const segHeightsPx = [];
+
+  let lastY = startY;
+
+  for (let y = startY; y < endY; y += viewportH) {
+    lastY = y;
+    if (!activeScreenshotFlow || activeScreenshotFlow.tabId !== tabId) {
+      throw new Error('Scroll screenshot dibatalkan.');
+    }
+    if (activeScreenshotFlow.scrollCancel) {
+      throw new Error('Scroll screenshot dibatalkan.');
+    }
+
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
+    await sleep(220);
+    const dataUrl = await captureVisibleTabForTab(tabId);
+    captured.push(dataUrl);
+
+    const remainingCss = Math.max(0, Math.min(viewportH, endY - y));
+    const drawHPx = Math.round(remainingCss * dpr);
+    segHeightsPx.push(drawHPx);
+
+    if (activeScreenshotFlow.scrollStop) {
+      const stopAt = typeof activeScreenshotFlow.stopAtY === 'number' ? activeScreenshotFlow.stopAtY : y;
+      if (y >= stopAt) break;
+    }
+  }
+
+  if (!captured.length) throw new Error('Tidak ada gambar yang berhasil di-capture.');
+
+  const firstBlob = await dataUrlToBlob(captured[0]);
+  const firstBmp = await createImageBitmap(firstBlob);
+  const widthPx = firstBmp.width;
+
+  const lastVisibleCss = Math.max(0, Math.min(viewportH, endY - lastY));
+  const totalHeightCss = (lastY - startY) + lastVisibleCss;
+  const totalHeightPx = Math.round(totalHeightCss * dpr);
+
+  if (totalHeightPx > 30000 || widthPx > 30000) {
+    throw new Error('Hasil terlalu panjang/besar. Coba berhenti lebih cepat atau gunakan area selection.');
+  }
+
+  const stitched = await stitchVerticalDataUrls(captured, segHeightsPx, widthPx, totalHeightPx);
+
+  // Restore original scroll
+  await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: metrics.scrollY || 0 });
+  await sleep(120);
+
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' });
+  } catch (_) {
+    // ignore
+  }
+
+  const meta = {
+    type: 'screenshot',
+    mode: 'scroll',
     tabId,
     capturedAt: new Date().toISOString()
   };
@@ -677,13 +821,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (mode === 'area') {
           await ensureTabActive(tabId);
           try {
+            await ensureContentScript(tabId);
             await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_START_AREA_SELECT' });
             // Only close popup when overlay successfully started.
             sendResponse({ ok: true });
           } catch (e) {
             activeScreenshotFlow = null;
-            const msg = 'Tidak bisa memulai area selection. Coba refresh tab setelah reload extension (atau halaman ini memang tidak mengizinkan content script).';
-            openScreenshotError(msg);
+            const msg = e?.message || 'Tidak bisa memulai area selection. Coba refresh tab setelah reload extension.';
+            // For area, keep it simple: let popup show the error (no new tab).
             sendResponse({ ok: false, error: msg });
           }
           return;
@@ -692,8 +837,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // full/scroll runs async; reply OK so popup can close
         sendResponse({ ok: true });
 
-        if (mode === 'full' || mode === 'scroll') {
-          await captureFullOrScroll(tabId, mode);
+        if (mode === 'full') {
+          await captureFull(tabId);
+        } else if (mode === 'scroll') {
+          // Default: capture until user clicks ✅ stop
+          activeScreenshotFlow.scrollStop = false;
+          activeScreenshotFlow.scrollCancel = false;
+          activeScreenshotFlow.stopAtY = null;
+          await captureScrollInteractive(tabId);
         } else {
           throw new Error('Mode screenshot tidak dikenal');
         }
@@ -753,6 +904,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
     })();
 
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // Stop/cancel signals for interactive scroll mode
+  else if (request.action === 'SCREENSHOT_SCROLL_STOP') {
+    if (activeScreenshotFlow && activeScreenshotFlow.mode === 'scroll') {
+      activeScreenshotFlow.scrollStop = true;
+      if (typeof request.scrollY === 'number') activeScreenshotFlow.stopAtY = request.scrollY;
+    }
+    sendResponse({ ok: true });
+    return true;
+  }
+  else if (request.action === 'SCREENSHOT_SCROLL_CANCEL') {
+    if (activeScreenshotFlow && activeScreenshotFlow.mode === 'scroll') {
+      activeScreenshotFlow.scrollCancel = true;
+    }
     sendResponse({ ok: true });
     return true;
   }

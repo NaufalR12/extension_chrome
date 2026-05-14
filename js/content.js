@@ -213,6 +213,10 @@ document.addEventListener('blur', (e) => {
 
 // Respond to requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'BERIBUG_PING') {
+    sendResponse({ ok: true });
+    return;
+  }
   if (request.action === 'GET_RESOLUTION') {
     sendResponse({ resolution: `${window.innerWidth}x${window.innerHeight}` });
   } else if (request.action === 'SHOW_WIDGET') {
@@ -235,6 +239,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   } else if (request.action === 'SCREENSHOT_START_AREA_SELECT') {
     startAreaSelectionOverlay();
+    sendResponse({ ok: true });
+  } else if (request.action === 'SCREENSHOT_SCROLL_UI_START') {
+    startScrollStopOverlay();
+    sendResponse({ ok: true });
+  } else if (request.action === 'SCREENSHOT_SCROLL_UI_END') {
+    removeScrollStopOverlay();
     sendResponse({ ok: true });
   }
 });
@@ -281,6 +291,7 @@ function scrollToY(y) {
 }
 
 let __beribugShotOverlay = null;
+let __beribugScrollOverlay = null;
 
 function startAreaSelectionOverlay() {
   if (__beribugShotOverlay) return;
@@ -390,6 +401,77 @@ function startAreaSelectionOverlay() {
   });
 
   document.documentElement.appendChild(overlay);
+}
+
+function removeScrollStopOverlay() {
+  if (__beribugScrollOverlay) {
+    __beribugScrollOverlay.remove();
+    __beribugScrollOverlay = null;
+  }
+}
+
+function startScrollStopOverlay() {
+  if (__beribugScrollOverlay) return;
+
+  const box = document.createElement('div');
+  __beribugScrollOverlay = box;
+  box.style.position = 'fixed';
+  box.style.right = '18px';
+  box.style.bottom = '18px';
+  box.style.zIndex = '2147483647';
+  box.style.display = 'flex';
+  box.style.gap = '10px';
+  box.style.alignItems = 'center';
+  box.style.padding = '12px 12px';
+  box.style.borderRadius = '12px';
+  box.style.background = 'rgba(0,0,0,0.72)';
+  box.style.color = '#fff';
+  box.style.font = '600 13px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+  box.style.boxShadow = '0 10px 24px rgba(0,0,0,0.25)';
+  box.style.userSelect = 'none';
+
+  const text = document.createElement('div');
+  text.textContent = 'Scroll untuk lanjut, klik ✅ bila cukup';
+  text.style.marginRight = '6px';
+
+  const btnStop = document.createElement('button');
+  btnStop.type = 'button';
+  btnStop.textContent = '✅';
+  btnStop.title = 'Selesai';
+  btnStop.style.width = '44px';
+  btnStop.style.height = '36px';
+  btnStop.style.borderRadius = '10px';
+  btnStop.style.border = '1px solid rgba(255,255,255,0.2)';
+  btnStop.style.background = 'rgba(26,115,232,0.95)';
+  btnStop.style.color = '#fff';
+  btnStop.style.cursor = 'pointer';
+
+  const btnCancel = document.createElement('button');
+  btnCancel.type = 'button';
+  btnCancel.textContent = '✕';
+  btnCancel.title = 'Batal';
+  btnCancel.style.width = '44px';
+  btnCancel.style.height = '36px';
+  btnCancel.style.borderRadius = '10px';
+  btnCancel.style.border = '1px solid rgba(255,255,255,0.2)';
+  btnCancel.style.background = 'rgba(217,48,37,0.95)';
+  btnCancel.style.color = '#fff';
+  btnCancel.style.cursor = 'pointer';
+
+  btnStop.addEventListener('click', () => {
+    const y = window.scrollY;
+    removeScrollStopOverlay();
+    chrome.runtime.sendMessage({ action: 'SCREENSHOT_SCROLL_STOP', scrollY: y }).catch(() => {});
+  });
+  btnCancel.addEventListener('click', () => {
+    removeScrollStopOverlay();
+    chrome.runtime.sendMessage({ action: 'SCREENSHOT_SCROLL_CANCEL' }).catch(() => {});
+  });
+
+  box.appendChild(text);
+  box.appendChild(btnStop);
+  box.appendChild(btnCancel);
+  document.documentElement.appendChild(box);
 }
 
 
