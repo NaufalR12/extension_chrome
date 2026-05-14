@@ -1186,7 +1186,7 @@ document.addEventListener('DOMContentLoaded', () => {
           headers: { Authorization: `Bearer ${authToken}` }
         });
         const meta = await metaRes.json();
-        const currentName = meta.name || ""; // e.g. Trace_OldTitle_2026-04-23T12-00-00-000Z.json
+        const currentName = meta.name || ""; // e.g. BERIBUG_OldTitle_2026-04-23T12-00-00-000Z.json
         
         // Extract timestamp from old name
         const parts = currentName.split('_');
@@ -1194,8 +1194,8 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Prepare new sanitized names
         const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, '_');
-        const newJsonName = `Trace_${sanitizedTitle}_${timeStampPart}.json`;
-        const newVideoName = `Trace_${sanitizedTitle}_${timeStampPart}.webm`;
+        const newJsonName = `BERIBUG_${sanitizedTitle}_${timeStampPart}.json`;
+        const newVideoName = `BERIBUG_${sanitizedTitle}_${timeStampPart}.webm`;
 
         // 2. Update JSON content
         fullData.title = title;
@@ -1241,7 +1241,7 @@ document.addEventListener('DOMContentLoaded', () => {
         document.querySelector('#stepSuccess h2').textContent = "Successfully Updated!";
         
         // Use the Netlify player URL for the share link
-        shareLink.value = `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoId}&l=${existingJsonId}`;
+        shareLink.value = `https://beribug-player.netlify.app/?v=${videoId}&l=${existingJsonId}`;
         
       } catch (err) {
         showError("Failed to update: " + err);

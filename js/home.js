@@ -103,13 +103,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       // 1. Get Folder ID
-      const query = "name='TRACE_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
+      const query = "name='BERIBUG_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
       let res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`, {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       let json = await res.json();
       if (!json.files || json.files.length === 0) {
-        showError("Folder TRACE_Reports_App not found. Have you recorded any reports yet?");
+        showError("Folder BERIBUG_Reports_App not found. Have you recorded any reports yet?");
         return;
       }
       const folderId = json.files[0].id;
@@ -211,13 +211,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       // 1. Get Folder ID
-      const query = "name='TRACE_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
+      const query = "name='BERIBUG_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
       let res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`, {
         headers: { Authorization: `Bearer ${authToken}` }
       });
       let json = await res.json();
       if (!json.files || json.files.length === 0) {
-        showErrorTrash("Folder TRACE_Reports_App not found.");
+        showErrorTrash("Folder BERIBUG_Reports_App not found.");
         return;
       }
       const folderId = json.files[0].id;

@@ -596,7 +596,7 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   
   if (!token) throw new Error("Could not authenticate with Google");
 
-  const folderId = await getOrCreateFolder(token, 'TRACE_Reports_App');
+  const folderId = await getOrCreateFolder(token, 'BERIBUG_Reports_App');
 
   const jsonBlob = new Blob([JSON.stringify({
     version: "1.0",
@@ -636,8 +636,8 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
   const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, '_');
   
-  const videoFileId = await uploadFileToDrive(token, `Trace_${sanitizedTitle}_${timeStamp}.webm`, 'video/webm', videoBlob, folderId);
-  const jsonFileId = await uploadFileToDrive(token, `Trace_${sanitizedTitle}_${timeStamp}.json`, 'application/json', jsonBlob, folderId);
+  const videoFileId = await uploadFileToDrive(token, `BERIBUG_${sanitizedTitle}_${timeStamp}.webm`, 'video/webm', videoBlob, folderId);
+  const jsonFileId = await uploadFileToDrive(token, `BERIBUG_${sanitizedTitle}_${timeStamp}.json`, 'application/json', jsonBlob, folderId);
 
   await makeFilePublic(token, videoFileId);
   await makeFilePublic(token, jsonFileId); // Make JSON public as well to be read by Player
@@ -656,7 +656,7 @@ async function commitUpload(title, desc, videoBase64, infoData) {
 
 async function getVideoFromDB() {
   return new Promise((resolve) => {
-    const request = indexedDB.open("TRACE_Storage", 1);
+    const request = indexedDB.open("BERIBUG_Storage", 1);
     request.onupgradeneeded = (e) => {
       const db = e.target.result;
       if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
@@ -675,7 +675,7 @@ async function getVideoFromDB() {
 
 async function clearVideoFromDB() {
   return new Promise((resolve) => {
-    const request = indexedDB.open("TRACE_Storage", 1);
+    const request = indexedDB.open("BERIBUG_Storage", 1);
     request.onsuccess = (e) => {
       const db = e.target.result;
       const transaction = db.transaction("videos", "readwrite");

@@ -399,7 +399,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- UTILS & HELPERS ---
   async function saveVideoToDB(blob) {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open("TRACE_Storage", 1);
+      const request = indexedDB.open("BERIBUG_Storage", 1);
       request.onupgradeneeded = (e) => {
         const db = e.target.result;
         if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
@@ -418,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function getVideoFromDB() {
     return new Promise((resolve) => {
-      const request = indexedDB.open("TRACE_Storage", 1);
+      const request = indexedDB.open("BERIBUG_Storage", 1);
       request.onupgradeneeded = (e) => {
         const db = e.target.result;
         if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
