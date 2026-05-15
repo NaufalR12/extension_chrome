@@ -667,7 +667,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   // 2. Recording Controls
   else if (request.action === 'START_RECORDING') {
-    resetLogs().then(() => {
+    resetLogs().then(async () => {
+      // FIX ISSUE 1: Always clear old videos from IndexedDB and local storage on new recording!
+      await clearVideoFromDB();
+      await chrome.storage.local.remove(['pendingVideo', 'pendingReport']);
+      pendingVideoBase64 = null;
+      
       isRecording = true;
       recordingStartTime = null; // Don't set yet, wait for media stream
       headerCache.clear();
@@ -1049,8 +1054,15 @@ async function commitUpload(title, desc, videoBase64, infoData) {
     if (dbBlob) {
       videoBlob = dbBlob;
     } else {
-      // Fallback to memory base64
-      const byteCharacters = atob(videoBase64);
+      // Fallback to memory base64 or local storage if background restarted
+      let b64 = videoBase64;
+      if (!b64 || b64 === "null") {
+        const res = await chrome.storage.local.get(['pendingVideo']);
+        b64 = res.pendingVideo;
+      }
+      if (!b64) throw new Error("No video data found in memory or storage.");
+
+      const byteCharacters = atob(b64);
       const byteArray = new Uint8Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
         byteArray[i] = byteCharacters.charCodeAt(i);
@@ -1058,13 +1070,8 @@ async function commitUpload(title, desc, videoBase64, infoData) {
       videoBlob = new Blob([byteArray], {type: 'video/webm'});
     }
   } catch (err) {
-    console.error("DB Fetch failed, falling back:", err);
-    const byteCharacters = atob(videoBase64);
-    const byteArray = new Uint8Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteArray[i] = byteCharacters.charCodeAt(i);
-    }
-    videoBlob = new Blob([byteArray], {type: 'video/webm'});
+    console.error("DB/Fallback Fetch failed:", err);
+    throw new Error("Failed to prepare video blob for upload: " + err.message);
   }
 
   const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
