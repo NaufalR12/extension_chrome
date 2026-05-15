@@ -12,9 +12,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const playhead = document.getElementById('playhead');
   const timelineTrack = document.getElementById('timelineTrack');
   const btnPlayPause = document.getElementById('btnPlayPause');
+  const btnBack5 = document.getElementById('btnBack5');
+  const btnFwd5 = document.getElementById('btnFwd5');
   const currentTimeDisplay = document.getElementById('currentTime');
   const durationDisplay = document.getElementById('duration');
   const playbackSpeed = document.getElementById('playbackSpeed');
+  const activeEditDurationInput = document.getElementById('activeEditDuration');
   const editListContainer = document.getElementById('editList');
   const renderOverlay = document.getElementById('renderOverlay');
   const renderProgress = document.getElementById('renderProgress');
@@ -31,6 +34,14 @@ document.addEventListener('DOMContentLoaded', () => {
   let cropRect = null; // {x, y, w, h}
   let magnifier = null; // {time, x, y, size}
   let currentCutStart = null;
+
+  // Settings / selection / drag
+  let defaultActiveEditDurationSec = 5;
+  let nextEditId = 1;
+  let selectedEditId = null;
+  let isSeeking = false;
+  let wasPlayingBeforeSeek = false;
+  let draggingEditZone = null; // { id, baseStart, baseEnd, startClientX }
   
   // Interaction State
   let isDragging = false;
@@ -39,6 +50,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- INITIALIZATION ---
   async function init() {
+    loadEditorSettings();
+
     // 1. Load Logs from SessionStorage
     const savedLogs = sessionStorage.getItem('editLogs');
     if (savedLogs) {
@@ -85,6 +98,8 @@ document.addEventListener('DOMContentLoaded', () => {
       canvas.width = sourceVideo.videoWidth;
       canvas.height = sourceVideo.videoHeight;
       durationDisplay.textContent = formatTime(sourceVideo.duration);
+      sourceVideo.playbackRate = parseFloat(playbackSpeed.value || '1');
+      renderEditsUI();
       requestAnimationFrame(renderLoop);
     };
   }
@@ -166,7 +181,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function updateTimeline() {
-    const pct = (sourceVideo.currentTime / sourceVideo.duration) * 100;
+    const dur = sourceVideo.duration;
+    if (!dur || !isFinite(dur)) {
+      playhead.style.left = '0%';
+      currentTimeDisplay.textContent = formatTime(0);
+      return;
+    }
+
+    const pct = Math.max(0, Math.min(100, (sourceVideo.currentTime / dur) * 100));
     playhead.style.left = `${pct}%`;
     currentTimeDisplay.textContent = formatTime(sourceVideo.currentTime);
   }
@@ -184,21 +206,24 @@ document.addEventListener('DOMContentLoaded', () => {
     startY = (e.clientY - rect.top) * scaleY;
 
     if (activeTool === 'zoom') {
-      magnifier = { start: sourceVideo.currentTime, end: sourceVideo.currentTime + 5, x: startX, y: startY };
-      addEditItem('Magnifier', magnifier);
+      magnifier = ensureEditId({ start: sourceVideo.currentTime, end: sourceVideo.currentTime + defaultActiveEditDurationSec, x: startX, y: startY }, 'mag');
+      selectEdit(magnifier._id);
+      renderEditsUI();
       return;
     }
 
     currentAnnotation = {
       type: activeTool,
       start: sourceVideo.currentTime,
-      end: sourceVideo.currentTime + 5,
+      end: sourceVideo.currentTime + defaultActiveEditDurationSec,
       x: startX, y: startY, w: 0, h: 0,
       points: activeTool === 'pen' ? [{x: startX, y: startY}] : null,
       color: document.querySelector('.color-swatch.active')?.dataset.color || '#ff0000',
       size: parseInt(document.getElementById('propStrokeWidth').value),
       amount: parseInt(document.getElementById('propBlurAmount').value)
     };
+    ensureEditId(currentAnnotation, 'ann');
+    selectEdit(currentAnnotation._id);
   });
 
   interactionLayer.addEventListener('mousemove', (e) => {
@@ -225,11 +250,12 @@ document.addEventListener('DOMContentLoaded', () => {
     isDragging = false;
 
     if (activeTool === 'crop') {
-      cropRect = { x: Math.min(startX, startX + currentAnnotation.w), y: Math.min(startY, startY + currentAnnotation.h), w: Math.abs(currentAnnotation.w), h: Math.abs(currentAnnotation.h) };
-      addEditItem('Crop Area', cropRect);
+      cropRect = ensureEditId({ x: Math.min(startX, startX + currentAnnotation.w), y: Math.min(startY, startY + currentAnnotation.h), w: Math.abs(currentAnnotation.w), h: Math.abs(currentAnnotation.h) }, 'crop');
+      selectEdit(cropRect._id);
+      renderEditsUI();
     } else if (currentAnnotation) {
       annotations.push(currentAnnotation);
-      addEditItem(currentAnnotation.type, currentAnnotation);
+      renderEditsUI();
     }
     currentAnnotation = null;
   });
@@ -259,6 +285,52 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  btnBack5.addEventListener('click', () => {
+    if (!sourceVideo.duration || !isFinite(sourceVideo.duration)) return;
+    sourceVideo.currentTime = Math.max(0, sourceVideo.currentTime - 5);
+  });
+
+  btnFwd5.addEventListener('click', () => {
+    if (!sourceVideo.duration || !isFinite(sourceVideo.duration)) return;
+    sourceVideo.currentTime = Math.min(sourceVideo.duration, sourceVideo.currentTime + 5);
+  });
+
+  playbackSpeed.addEventListener('change', () => {
+    const rate = parseFloat(playbackSpeed.value || '1');
+    sourceVideo.playbackRate = isFinite(rate) ? rate : 1;
+  });
+
+  // Seek by clicking/dragging on timeline (playhead can be dragged indirectly)
+  timelineTrack.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('.edit-zone')) return;
+    if (!sourceVideo.duration || !isFinite(sourceVideo.duration)) return;
+
+    isSeeking = true;
+    wasPlayingBeforeSeek = !sourceVideo.paused;
+    seekToClientX(e.clientX);
+
+    const onMove = (ev) => {
+      if (!isSeeking) return;
+      seekToClientX(ev.clientX);
+    };
+
+    const onUp = () => {
+      if (!isSeeking) return;
+      isSeeking = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (wasPlayingBeforeSeek) {
+        sourceVideo.play();
+        btnPlayPause.textContent = '⏸';
+        isPlaying = true;
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, true);
+
   document.getElementById('btnMarkCut').addEventListener('click', () => {
     if (currentCutStart === null) {
       currentCutStart = sourceVideo.currentTime;
@@ -268,62 +340,22 @@ document.addEventListener('DOMContentLoaded', () => {
       const end = sourceVideo.currentTime;
       const start = Math.min(currentCutStart, end);
       const realEnd = Math.max(currentCutStart, end);
-      const newCut = { start, end: realEnd };
+      const newCut = ensureEditId({ start, end: realEnd }, 'cut');
       cuts.push(newCut);
       currentCutStart = null;
       document.getElementById('btnMarkCut').textContent = '✂️ Mark Cut Start';
       document.getElementById('btnMarkCut').classList.remove('active');
-      renderCutZones();
-      addEditItem('Cut Segment', newCut);
+      selectEdit(newCut._id);
+      renderEditsUI();
     }
   });
 
   document.getElementById('btnDeleteSegment').addEventListener('click', () => {
-    if (cuts.length > 0) {
-      const lastCut = cuts.pop();
-      const items = editListContainer.querySelectorAll('.edit-item');
-      for (let item of items) {
-        if (item.textContent.includes('Cut Segment') && item.dataset.start == lastCut.start) {
-          item.remove();
-          break;
-        }
-      }
-      renderCutZones();
-    }
+    if (!selectedEditId) return;
+    removeEditById(selectedEditId);
+    selectedEditId = null;
+    renderEditsUI();
   });
-
-  function renderCutZones() {
-    const container = document.getElementById('cutZones');
-    container.innerHTML = '';
-    cuts.forEach(cut => {
-      const startPct = (cut.start / sourceVideo.duration) * 100;
-      const widthPct = ((cut.end - cut.start) / sourceVideo.duration) * 100;
-      const el = document.createElement('div');
-      el.className = 'cut-zone';
-      el.style.left = `${startPct}%`;
-      el.style.width = `${widthPct}%`;
-      container.appendChild(el);
-    });
-  }
-
-  function addEditItem(label, data) {
-    const item = document.createElement('div');
-    item.className = 'edit-item';
-    if (data.start != null) item.dataset.start = data.start;
-    const timeInfo = data.start != null ? `[${formatTime(data.start)}-${formatTime(data.end)}]` : '';
-    item.innerHTML = `<span>${label} ${timeInfo}</span> <button class="remove-btn">✕</button>`;
-    
-    item.querySelector('.remove-btn').addEventListener('click', () => {
-      if (label === 'Cut Segment') cuts = cuts.filter(c => c !== data);
-      if (label === 'Crop Area') cropRect = null;
-      annotations = annotations.filter(a => a !== data);
-      if (label === 'Magnifier') magnifier = null;
-      item.remove();
-      renderCutZones();
-    });
-    
-    editListContainer.appendChild(item);
-  }
 
   // --- RENDERING ENGINE ---
   document.getElementById('btnApply').addEventListener('click', async () => {
@@ -544,4 +576,219 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('propStrokeWidth').addEventListener('input', (e) => {
     document.getElementById('valStrokeWidth').textContent = e.target.value;
   });
+
+  // --- SETTINGS ---
+  function loadEditorSettings() {
+    const saved = parseFloat(localStorage.getItem('beribug_defaultActiveEditDurationSec') || '5');
+    defaultActiveEditDurationSec = (isFinite(saved) && saved > 0) ? saved : 5;
+    if (activeEditDurationInput) activeEditDurationInput.value = String(defaultActiveEditDurationSec);
+  }
+
+  activeEditDurationInput?.addEventListener('change', () => {
+    const val = parseFloat(activeEditDurationInput.value || '5');
+    defaultActiveEditDurationSec = (isFinite(val) && val > 0) ? val : 5;
+    localStorage.setItem('beribug_defaultActiveEditDurationSec', String(defaultActiveEditDurationSec));
+  });
+
+  // --- ACTIVE EDITS UI (List + Timeline Zones) ---
+  function ensureEditId(obj, prefix) {
+    if (!obj) return obj;
+    if (!obj._id) obj._id = `${prefix}_${nextEditId++}`;
+    return obj;
+  }
+
+  function getAllEdits() {
+    const edits = [];
+
+    cuts.forEach(c => edits.push({ kind: 'cut', label: 'Cut Segment', data: c }));
+    annotations.forEach(a => edits.push({ kind: 'annotation', label: `Annotation: ${a.type}`, data: a }));
+    if (magnifier) edits.push({ kind: 'magnifier', label: 'Magnifier', data: magnifier });
+    if (cropRect) edits.push({ kind: 'crop', label: 'Crop Area', data: cropRect });
+
+    // Sort by start time when possible
+    edits.sort((a, b) => {
+      const aStart = (a.data.start != null) ? a.data.start : Number.POSITIVE_INFINITY;
+      const bStart = (b.data.start != null) ? b.data.start : Number.POSITIVE_INFINITY;
+      return aStart - bStart;
+    });
+
+    return edits;
+  }
+
+  function getEditDataById(id) {
+    if (!id) return null;
+    for (const c of cuts) if (c._id === id) return c;
+    for (const a of annotations) if (a._id === id) return a;
+    if (magnifier && magnifier._id === id) return magnifier;
+    if (cropRect && cropRect._id === id) return cropRect;
+    return null;
+  }
+
+  function removeEditById(id) {
+    const beforeCuts = cuts.length;
+    cuts = cuts.filter(c => c._id !== id);
+    if (cuts.length !== beforeCuts) return;
+
+    const beforeAnn = annotations.length;
+    annotations = annotations.filter(a => a._id !== id);
+    if (annotations.length !== beforeAnn) return;
+
+    if (magnifier && magnifier._id === id) { magnifier = null; return; }
+    if (cropRect && cropRect._id === id) { cropRect = null; return; }
+  }
+
+  function selectEdit(id) {
+    selectedEditId = id;
+    renderEditList();
+    renderTimelineEdits();
+  }
+
+  function renderEditsUI() {
+    renderEditList();
+    renderTimelineEdits();
+  }
+
+  function renderEditList() {
+    editListContainer.innerHTML = '';
+    const edits = getAllEdits();
+    edits.forEach(({ kind, label, data }) => {
+      ensureEditId(data, kind);
+      const item = document.createElement('div');
+      item.className = 'edit-item';
+      item.dataset.id = data._id;
+      item.dataset.kind = kind;
+      if (data._id === selectedEditId) item.classList.add('selected');
+
+      const timeInfo = (data.start != null && data.end != null)
+        ? ` [${formatTime(data.start)}-${formatTime(data.end)}]`
+        : '';
+
+      item.innerHTML = `<span class="edit-label">${label}${timeInfo}</span> <button class="remove-btn" title="Remove">✕</button>`;
+
+      item.addEventListener('click', (e) => {
+        if (e.target.closest('.remove-btn')) return;
+        selectEdit(data._id);
+        if (data.start != null && isFinite(sourceVideo.duration)) {
+          sourceVideo.currentTime = Math.max(0, Math.min(sourceVideo.duration, data.start));
+        }
+      });
+
+      item.querySelector('.remove-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeEditById(data._id);
+        if (selectedEditId === data._id) selectedEditId = null;
+        renderEditsUI();
+      });
+
+      editListContainer.appendChild(item);
+    });
+  }
+
+  function renderTimelineEdits() {
+    const container = document.getElementById('cutZones');
+    container.innerHTML = '';
+    const dur = sourceVideo.duration;
+    if (!dur || !isFinite(dur)) return;
+
+    const edits = getAllEdits().filter(e => e.data.start != null && e.data.end != null);
+    edits.forEach(({ kind, data }) => {
+      const startPct = (data.start / dur) * 100;
+      const widthPct = ((data.end - data.start) / dur) * 100;
+      const el = document.createElement('div');
+      el.className = `edit-zone edit-zone--${kind}`;
+      el.dataset.id = data._id;
+      el.dataset.kind = kind;
+      el.style.left = `${startPct}%`;
+      el.style.width = `${Math.max(0.2, widthPct)}%`;
+      if (data._id === selectedEditId) el.classList.add('selected');
+
+      el.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectEdit(data._id);
+        startEditZoneDrag(e, data._id);
+      });
+
+      el.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (data.start != null) sourceVideo.currentTime = Math.max(0, Math.min(dur, data.start));
+      });
+
+      container.appendChild(el);
+    });
+  }
+
+  function updateEditTimesById(id, newStart, newEnd) {
+    const data = getEditDataById(id);
+    if (!data || data.start == null || data.end == null) return;
+    data.start = newStart;
+    data.end = newEnd;
+  }
+
+  function updateEditDomById(id) {
+    const dur = sourceVideo.duration;
+    const data = getEditDataById(id);
+    if (!data || !dur || !isFinite(dur) || data.start == null || data.end == null) return;
+
+    const zone = document.querySelector(`.edit-zone[data-id="${CSS.escape(id)}"]`);
+    if (zone) {
+      const startPct = (data.start / dur) * 100;
+      const widthPct = ((data.end - data.start) / dur) * 100;
+      zone.style.left = `${startPct}%`;
+      zone.style.width = `${Math.max(0.2, widthPct)}%`;
+    }
+
+    const item = editListContainer.querySelector(`.edit-item[data-id="${CSS.escape(id)}"] .edit-label`);
+    if (item) {
+      const baseLabel = item.textContent.replace(/\s\[.*\]$/, '');
+      item.textContent = `${baseLabel} [${formatTime(data.start)}-${formatTime(data.end)}]`;
+    }
+  }
+
+  function startEditZoneDrag(e, id) {
+    const data = getEditDataById(id);
+    if (!data || data.start == null || data.end == null) return;
+    draggingEditZone = {
+      id,
+      baseStart: data.start,
+      baseEnd: data.end,
+      startClientX: e.clientX
+    };
+
+    const onMove = (ev) => {
+      if (!draggingEditZone) return;
+      const rect = timelineTrack.getBoundingClientRect();
+      const dx = ev.clientX - draggingEditZone.startClientX;
+      const deltaSec = (dx / rect.width) * sourceVideo.duration;
+      const segDur = draggingEditZone.baseEnd - draggingEditZone.baseStart;
+
+      let newStart = draggingEditZone.baseStart + deltaSec;
+      newStart = Math.max(0, Math.min(sourceVideo.duration - segDur, newStart));
+      const newEnd = newStart + segDur;
+      updateEditTimesById(draggingEditZone.id, newStart, newEnd);
+      updateEditDomById(draggingEditZone.id);
+    };
+
+    const onUp = () => {
+      if (!draggingEditZone) return;
+      draggingEditZone = null;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      renderEditList();
+      renderTimelineEdits();
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  function seekToClientX(clientX) {
+    const rect = timelineTrack.getBoundingClientRect();
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const pct = rect.width ? (x / rect.width) : 0;
+    const t = pct * sourceVideo.duration;
+    sourceVideo.currentTime = Math.max(0, Math.min(sourceVideo.duration, t));
+  }
 });

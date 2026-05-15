@@ -249,7 +249,7 @@ body, html {
 .cut-zones-container {
   position: absolute;
   top: 0; bottom: 0; left: 0; right: 0;
-  pointer-events: none;
+  pointer-events: auto;
 }
 .cut-zone {
   position: absolute;
@@ -257,6 +257,39 @@ body, html {
   background: rgba(217, 48, 37, 0.3);
   border-left: 1px solid var(--danger);
   border-right: 1px solid var(--danger);
+}
+
+/* Draggable timeline zones for Active Edits */
+.edit-zone {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 4px;
+  cursor: grab;
+  z-index: 6;
+}
+.edit-zone:active { cursor: grabbing; }
+
+.edit-zone.edit-zone--cut {
+  background: rgba(217, 48, 37, 0.28);
+  border-left: 1px solid rgba(217, 48, 37, 0.9);
+  border-right: 1px solid rgba(217, 48, 37, 0.9);
+}
+
+.edit-zone.edit-zone--annotation {
+  background: rgba(26, 115, 232, 0.22);
+  border-left: 1px solid rgba(26, 115, 232, 0.9);
+  border-right: 1px solid rgba(26, 115, 232, 0.9);
+}
+
+.edit-zone.edit-zone--magnifier {
+  background: rgba(255, 235, 59, 0.22);
+  border-left: 1px solid rgba(255, 235, 59, 0.9);
+  border-right: 1px solid rgba(255, 235, 59, 0.9);
+}
+
+.edit-zone.selected {
+  outline: 2px solid rgba(232, 234, 237, 0.85);
 }
 
 #timelineWaveform {
@@ -306,6 +339,19 @@ body, html {
   gap: 10px;
 }
 
+.prop-group input[type="number"] {
+  background: var(--bg-lighter);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  outline: none;
+}
+.prop-group input[type="number"]:focus {
+  border-color: rgba(26, 115, 232, 0.8);
+}
+
 .prop-group label {
   font-size: 12px;
   color: var(--text-dim);
@@ -348,6 +394,11 @@ body, html {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.edit-item.selected {
+  outline: 2px solid rgba(26, 115, 232, 0.9);
+  background: rgba(26, 115, 232, 0.15);
 }
 
 .edit-item .remove-btn {
