@@ -48,6 +48,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let startX, startY;
   let currentAnnotation = null;
 
+  // Select/transform state
+  let isTransforming = false;
+  let transformState = null; // { id, mode: 'move'|'resize', handle, startX, startY, orig }
+
   // --- INITIALIZATION ---
   async function init() {
     loadEditorSettings();
@@ -178,6 +182,139 @@ document.addEventListener('DOMContentLoaded', () => {
       ctx.stroke();
       ctx.restore();
     }
+
+    // 4. Draw selection overlay (Select tool only)
+    drawSelectionOverlay(now);
+  }
+
+  function drawSelectionOverlay(now) {
+    if (activeTool !== 'select') return;
+    if (!selectedEditId) return;
+
+    const data = getEditDataById(selectedEditId);
+    if (!data) return;
+
+    const isTimed = (data.start != null && data.end != null);
+    if (isTimed && !(now >= data.start && now <= data.end)) return;
+
+    ctx.save();
+    ctx.strokeStyle = 'rgba(232, 234, 237, 0.95)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([6, 4]);
+
+    const handleSize = 10;
+
+    if (data.points && Array.isArray(data.points) && data.points.length > 0) {
+      const box = getPointsBoundingBox(data.points);
+      if (!box) { ctx.restore(); return; }
+      ctx.strokeRect(box.x, box.y, box.w, box.h);
+      drawHandles(box, handleSize);
+      ctx.restore();
+      return;
+    }
+
+    if (data.x != null && data.y != null && data.w != null && data.h != null) {
+      const box = normalizeRect({ x: data.x, y: data.y, w: data.w, h: data.h });
+      ctx.strokeRect(box.x, box.y, box.w, box.h);
+      drawHandles(box, handleSize);
+      ctx.restore();
+      return;
+    }
+
+    if (data.x != null && data.y != null && data.w == null && data.h == null) {
+      // point-based (magnifier)
+      ctx.beginPath();
+      ctx.arc(data.x, data.y, 10, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+
+    ctx.restore();
+  }
+
+  function drawHandles(box, size) {
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(232, 234, 237, 0.95)';
+    const half = size / 2;
+    const pts = [
+      { k: 'nw', x: box.x, y: box.y },
+      { k: 'ne', x: box.x + box.w, y: box.y },
+      { k: 'sw', x: box.x, y: box.y + box.h },
+      { k: 'se', x: box.x + box.w, y: box.y + box.h }
+    ];
+    pts.forEach(p => ctx.fillRect(p.x - half, p.y - half, size, size));
+  }
+
+  function normalizeRect(r) {
+    const x = Math.min(r.x, r.x + r.w);
+    const y = Math.min(r.y, r.y + r.h);
+    const w = Math.abs(r.w);
+    const h = Math.abs(r.h);
+    return { x, y, w, h };
+  }
+
+  function clampRectToCanvas(box) {
+    const minSize = 2;
+    let x = box.x;
+    let y = box.y;
+    let w = Math.max(minSize, box.w);
+    let h = Math.max(minSize, box.h);
+
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x + w > canvas.width) x = Math.max(0, canvas.width - w);
+    if (y + h > canvas.height) y = Math.max(0, canvas.height - h);
+
+    w = Math.min(w, canvas.width - x);
+    h = Math.min(h, canvas.height - y);
+    return { x, y, w, h };
+  }
+
+  function getPointsBoundingBox(points) {
+    if (!points || points.length === 0) return null;
+    let minX = points[0].x;
+    let minY = points[0].y;
+    let maxX = points[0].x;
+    let maxY = points[0].y;
+    for (const p of points) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+  }
+
+  function getCanvasPointFromEvent(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  }
+
+  function hitTestHandle(box, p) {
+    const size = 10;
+    const half = size / 2;
+    const handles = [
+      { k: 'nw', x: box.x, y: box.y },
+      { k: 'ne', x: box.x + box.w, y: box.y },
+      { k: 'sw', x: box.x, y: box.y + box.h },
+      { k: 'se', x: box.x + box.w, y: box.y + box.h }
+    ];
+    for (const h of handles) {
+      if (p.x >= h.x - half && p.x <= h.x + half && p.y >= h.y - half && p.y <= h.y + half) {
+        return h.k;
+      }
+    }
+    return null;
+  }
+
+  function pointInBox(box, p) {
+    return p.x >= box.x && p.x <= box.x + box.w && p.y >= box.y && p.y <= box.y + box.h;
   }
 
   function updateTimeline() {
@@ -195,7 +332,55 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- INTERACTION LOGIC ---
   interactionLayer.addEventListener('mousedown', (e) => {
-    if (activeTool === 'select') return;
+    if (activeTool === 'select') {
+      if (!selectedEditId) return;
+      const data = getEditDataById(selectedEditId);
+      if (!data) return;
+      const now = sourceVideo.currentTime;
+      const isTimed = (data.start != null && data.end != null);
+      if (isTimed && !(now >= data.start && now <= data.end)) return;
+
+      const p = getCanvasPointFromEvent(e);
+
+      // Pen (points): move only
+      if (data.points && Array.isArray(data.points) && data.points.length > 0) {
+        const box = getPointsBoundingBox(data.points);
+        if (!box || !pointInBox(box, p)) return;
+        isTransforming = true;
+        transformState = { id: selectedEditId, mode: 'move', handle: null, startX: p.x, startY: p.y, orig: { points: data.points.map(pt => ({ ...pt })) } };
+        return;
+      }
+
+      // Rect-like: move or resize
+      if (data.x != null && data.y != null && data.w != null && data.h != null) {
+        const box = normalizeRect({ x: data.x, y: data.y, w: data.w, h: data.h });
+        const handle = hitTestHandle(box, p);
+        if (handle || pointInBox(box, p)) {
+          isTransforming = true;
+          transformState = {
+            id: selectedEditId,
+            mode: handle ? 'resize' : 'move',
+            handle,
+            startX: p.x,
+            startY: p.y,
+            orig: { box }
+          };
+        }
+        return;
+      }
+
+      // Point-like (magnifier): move
+      if (data.x != null && data.y != null && data.w == null && data.h == null) {
+        const dx = p.x - data.x;
+        const dy = p.y - data.y;
+        if (Math.sqrt(dx*dx + dy*dy) > 14) return;
+        isTransforming = true;
+        transformState = { id: selectedEditId, mode: 'move', handle: null, startX: p.x, startY: p.y, orig: { x: data.x, y: data.y } };
+        return;
+      }
+
+      return;
+    }
     
     isDragging = true;
     const rect = canvas.getBoundingClientRect();
@@ -227,6 +412,61 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   interactionLayer.addEventListener('mousemove', (e) => {
+    if (isTransforming && transformState) {
+      const data = getEditDataById(transformState.id);
+      if (!data) return;
+      const p = getCanvasPointFromEvent(e);
+      const dx = p.x - transformState.startX;
+      const dy = p.y - transformState.startY;
+
+      if (data.points && transformState.orig?.points) {
+        data.points = transformState.orig.points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }));
+      } else if (data.x != null && data.y != null && data.w != null && data.h != null) {
+        const origBox = transformState.orig.box;
+        if (transformState.mode === 'move') {
+          let newBox = { x: origBox.x + dx, y: origBox.y + dy, w: origBox.w, h: origBox.h };
+          newBox = clampRectToCanvas(newBox);
+          data.x = newBox.x;
+          data.y = newBox.y;
+          data.w = newBox.w;
+          data.h = newBox.h;
+        } else if (transformState.mode === 'resize') {
+          let newBox = { ...origBox };
+          if (transformState.handle === 'se') {
+            newBox.w = origBox.w + dx;
+            newBox.h = origBox.h + dy;
+          } else if (transformState.handle === 'sw') {
+            newBox.x = origBox.x + dx;
+            newBox.w = origBox.w - dx;
+            newBox.h = origBox.h + dy;
+          } else if (transformState.handle === 'ne') {
+            newBox.y = origBox.y + dy;
+            newBox.w = origBox.w + dx;
+            newBox.h = origBox.h - dy;
+          } else if (transformState.handle === 'nw') {
+            newBox.x = origBox.x + dx;
+            newBox.y = origBox.y + dy;
+            newBox.w = origBox.w - dx;
+            newBox.h = origBox.h - dy;
+          }
+          newBox = clampRectToCanvas(normalizeRect(newBox));
+          data.x = newBox.x;
+          data.y = newBox.y;
+          data.w = newBox.w;
+          data.h = newBox.h;
+        }
+      } else if (data.x != null && data.y != null && data.w == null && data.h == null) {
+        // point-like
+        const newX = Math.max(0, Math.min(canvas.width, transformState.orig.x + dx));
+        const newY = Math.max(0, Math.min(canvas.height, transformState.orig.y + dy));
+        data.x = newX;
+        data.y = newY;
+      }
+
+      if (!isPlaying) drawFrame();
+      return;
+    }
+
     if (!isDragging || !currentAnnotation) return;
     
     const rect = canvas.getBoundingClientRect();
@@ -246,6 +486,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   interactionLayer.addEventListener('mouseup', () => {
+    if (isTransforming) {
+      isTransforming = false;
+      transformState = null;
+      if (!isPlaying) drawFrame();
+      return;
+    }
     if (!isDragging) return;
     isDragging = false;
 
@@ -657,21 +903,54 @@ document.addEventListener('DOMContentLoaded', () => {
       item.className = 'edit-item';
       item.dataset.id = data._id;
       item.dataset.kind = kind;
+      item.dataset.baseLabel = label;
       if (data._id === selectedEditId) item.classList.add('selected');
 
-      const timeInfo = (data.start != null && data.end != null)
-        ? ` [${formatTime(data.start)}-${formatTime(data.end)}]`
-        : '';
+      const hasTiming = (data.start != null && data.end != null);
+      const timeInfo = hasTiming ? ` [${formatTime(data.start)}-${formatTime(data.end)}]` : '';
+      const duration = hasTiming ? Math.max(0.1, (data.end - data.start)) : null;
 
-      item.innerHTML = `<span class="edit-label">${label}${timeInfo}</span> <button class="remove-btn" title="Remove">✕</button>`;
+      if (hasTiming) {
+        item.innerHTML = `
+          <span class="edit-label">${label}${timeInfo}</span>
+          <input class="edit-duration" type="number" min="0.1" step="0.5" value="${duration.toFixed(1)}" title="Duration (seconds)">
+          <button class="remove-btn" title="Remove">✕</button>
+        `;
+      } else {
+        item.innerHTML = `<span class="edit-label">${label}</span> <button class="remove-btn" title="Remove">✕</button>`;
+      }
 
       item.addEventListener('click', (e) => {
+        if (e.target.closest('.edit-duration')) return;
         if (e.target.closest('.remove-btn')) return;
         selectEdit(data._id);
         if (data.start != null && isFinite(sourceVideo.duration)) {
           sourceVideo.currentTime = Math.max(0, Math.min(sourceVideo.duration, data.start));
         }
       });
+
+      const durInput = item.querySelector('.edit-duration');
+      if (durInput) {
+        durInput.addEventListener('click', (e) => e.stopPropagation());
+        durInput.addEventListener('change', (e) => {
+          e.stopPropagation();
+          const newDur = parseFloat(e.target.value || '0');
+          if (!isFinite(newDur) || newDur <= 0) return;
+          const dur = (sourceVideo.duration && isFinite(sourceVideo.duration)) ? sourceVideo.duration : null;
+          const newStart = data.start;
+          let newEnd = newStart + newDur;
+          if (dur != null) newEnd = Math.min(dur, Math.max(newStart + 0.1, newEnd));
+          data.end = newEnd;
+          if (selectedEditId === data._id) {
+            renderTimelineEdits();
+          } else {
+            // Update only the DOM for that item + its zone if present
+            updateEditDomById(data._id);
+          }
+          renderEditList();
+          renderTimelineEdits();
+        });
+      }
 
       item.querySelector('.remove-btn').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -740,10 +1019,11 @@ document.addEventListener('DOMContentLoaded', () => {
       zone.style.width = `${Math.max(0.2, widthPct)}%`;
     }
 
-    const item = editListContainer.querySelector(`.edit-item[data-id="${CSS.escape(id)}"] .edit-label`);
-    if (item) {
-      const baseLabel = item.textContent.replace(/\s\[.*\]$/, '');
-      item.textContent = `${baseLabel} [${formatTime(data.start)}-${formatTime(data.end)}]`;
+    const itemEl = editListContainer.querySelector(`.edit-item[data-id="${CSS.escape(id)}"]`);
+    const labelEl = itemEl?.querySelector('.edit-label');
+    if (itemEl && labelEl) {
+      const baseLabel = itemEl.dataset.baseLabel || labelEl.textContent.replace(/\s\[.*\]$/, '');
+      labelEl.textContent = `${baseLabel} [${formatTime(data.start)}-${formatTime(data.end)}]`;
     }
   }
 

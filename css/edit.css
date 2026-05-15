@@ -410,6 +410,16 @@ body, html {
 }
 .edit-item .remove-btn:hover { color: var(--danger); }
 
+.edit-item input[type="number"] {
+  width: 72px;
+  background: var(--bg-panel);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
 /* Rendering Overlay */
 .render-overlay {
   position: fixed;
