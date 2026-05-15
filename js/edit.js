@@ -99,12 +99,25 @@ document.addEventListener('DOMContentLoaded', () => {
   function loadVideoToPlayer(blob) {
     sourceVideo.src = URL.createObjectURL(blob);
     sourceVideo.onloadedmetadata = () => {
-      canvas.width = sourceVideo.videoWidth;
-      canvas.height = sourceVideo.videoHeight;
-      durationDisplay.textContent = formatTime(sourceVideo.duration);
-      sourceVideo.playbackRate = parseFloat(playbackSpeed.value || '1');
-      renderEditsUI();
-      requestAnimationFrame(renderLoop);
+      const setupVideo = () => {
+        canvas.width = sourceVideo.videoWidth;
+        canvas.height = sourceVideo.videoHeight;
+        durationDisplay.textContent = formatTime(sourceVideo.duration);
+        sourceVideo.playbackRate = parseFloat(playbackSpeed.value || '1');
+        renderEditsUI();
+        requestAnimationFrame(renderLoop);
+      };
+
+      if (sourceVideo.duration === Infinity || isNaN(sourceVideo.duration)) {
+        sourceVideo.currentTime = 1e6; // Safe large number to force Chrome to calculate duration (1 million seconds)
+        sourceVideo.onseeked = () => {
+          sourceVideo.onseeked = null;
+          sourceVideo.currentTime = 0;
+          setupVideo();
+        };
+      } else {
+        setupVideo();
+      }
     };
   }
 
