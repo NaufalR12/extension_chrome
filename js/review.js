@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let authToken = null;
 
   // 1. Check for URL Parameters (Playback/Edit mode)
-  const urlParams = new URLSearchParams(window.location.search);
+  const urlParams = new URL(window.location.href).searchParams;
   const vId = urlParams.get('v');
   const lId = urlParams.get('l');
   const isEditMode = urlParams.get('edit') === 'true';
@@ -120,24 +120,31 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       // Render logs immediately
-      if (reportData.logs) {
+      if (reportData && (reportData.logs || reportData.console)) {
         inputTitle.value = reportData.title || "";
         inputDesc.value = reportData.description || "";
-        initReviewUI(reportData.logs);
-      } else if (reportData.console || reportData.network || reportData.actions) {
-        inputTitle.value = reportData.title || "";
-        inputDesc.value = reportData.description || "";
-        initReviewUI(reportData);
+        initReviewUI(reportData.logs || reportData);
       }
       
       loading.textContent = "Fetching video...";
 
       // Fetch Video in background
-      fetch(`https://www.googleapis.com/drive/v3/files/${vId}?alt=media`, {
+      const videoFetchUrl = `https://www.googleapis.com/drive/v3/files/${vId}?alt=media`;
+      fetch(videoFetchUrl, {
         headers: { Authorization: `Bearer ${authToken}` }
       })
-      .then(r => r.blob())
-      .then(blob => {
+      .then(r => {
+        if (!r.ok) throw new Error("Fetch failed with status " + r.status);
+        return r.blob();
+      })
+      .then(async blob => {
+        // Save to IndexedDB so edit.js can find it
+        try {
+          await saveVideoToDB(blob);
+          console.log("Video saved to DB for editing.");
+        } catch (dbErr) {
+          console.error("Failed to save video to DB", dbErr);
+        }
         videoPreview.src = URL.createObjectURL(blob);
         loading.classList.add('hidden');
       })
@@ -469,9 +476,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const isErr = (n.status && n.status >= 400) || n.status === 0;
         const statusClass = n.status >= 400 ? 'status-error' : (n.status >= 300 ? 'status-redirect' : 'status-success');
         
-        const urlObj = new URL(n.url);
-        const name = urlObj.pathname.split('/').pop() || urlObj.pathname || '/';
-        const domain = urlObj.hostname;
+        let name = "unknown";
+        let domain = "unknown";
+        try {
+          const urlObj = new URL(n.url);
+          name = urlObj.pathname.split('/').pop() || urlObj.pathname || '/';
+          domain = urlObj.hostname;
+        } catch (e) {
+          name = n.url || "invalid-url";
+        }
         
         // Waterfall logic
         const startPct = ((n.relativeMs || 0) / maxRelativeMs) * 100;
@@ -1300,6 +1313,25 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => { btnCopy.textContent = ogText; }, 2000);
   });
 });
+
+async function saveVideoToDB(blob) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("BERIBUG_Storage", 1);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
+    };
+    request.onsuccess = (e) => {
+      const db = e.target.result;
+      const transaction = db.transaction("videos", "readwrite");
+      const store = transaction.objectStore("videos");
+      const putRequest = store.put(blob, "pendingVideo");
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
 
 function getBrowserInfo() {
   const ua = navigator.userAgent;
