@@ -326,18 +326,36 @@ function scrollToY(y) {
     } catch (_) {
       window.scrollTo(0, y);
     }
-    requestAnimationFrame(() => {
-      setTimeout(() => {
-        const afterScroll = window.scrollY;
-        // Return actual scroll position after scrolling
-        resolve({
-          targetY: y,
-          actualY: afterScroll,
-          didScroll: afterScroll !== beforeScroll,
-          isAtBottom: (afterScroll + window.innerHeight >= document.body.scrollHeight - 1)
-        });
-      }, 140);
-    });
+
+    // Wait for scroll to settle. Some pages (lazy load / JS) need multiple frames.
+    let attempts = 0;
+    function checkOnce() {
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          const afterScroll = window.scrollY;
+          // consider stable if we're within 2px of target or we've tried several times
+          const isClose = Math.abs(afterScroll - y) <= 2;
+          const isAtBottom = (afterScroll + window.innerHeight >= document.body.scrollHeight - 1);
+          if (isClose || attempts >= 6) {
+            resolve({
+              targetY: y,
+              actualY: afterScroll,
+              didScroll: afterScroll !== beforeScroll,
+              isAtBottom
+            });
+            return;
+          }
+
+          attempts++;
+          // try to nudge scroll again
+          try { window.scrollTo({ top: y, left: 0, behavior: 'auto' }); } catch (_) { window.scrollTo(0, y); }
+          // small backoff between attempts
+          setTimeout(checkOnce, 120);
+        }, 160);
+      });
+    }
+
+    checkOnce();
   });
 }
 
