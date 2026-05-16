@@ -267,9 +267,28 @@ function getStorageSnapshot() {
 
 function getScreenshotMetrics() {
   const docEl = document.documentElement;
+  const body = document.body;
+  
+  // Try to find the real content height
+  const scrollHeight = Math.max(
+    body ? body.scrollHeight : 0,
+    body ? body.offsetHeight : 0,
+    docEl.clientHeight,
+    docEl.scrollHeight,
+    docEl.offsetHeight
+  );
+  
+  const scrollWidth = Math.max(
+    body ? body.scrollWidth : 0,
+    body ? body.offsetWidth : 0,
+    docEl.clientWidth,
+    docEl.scrollWidth,
+    docEl.offsetWidth
+  );
+
   return {
-    scrollHeight: Math.max(docEl.scrollHeight, document.body ? document.body.scrollHeight : 0),
-    scrollWidth: Math.max(docEl.scrollWidth, document.body ? document.body.scrollWidth : 0),
+    scrollHeight: scrollHeight,
+    scrollWidth: scrollWidth,
     viewportWidth: window.innerWidth,
     viewportHeight: window.innerHeight,
     devicePixelRatio: window.devicePixelRatio || 1,

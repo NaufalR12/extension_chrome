@@ -499,6 +499,43 @@ async function openScreenshotPreview(meta, imageDataUrl) {
   await chrome.tabs.create({ url: chrome.runtime.getURL('html/screenshot.html') });
 }
 
+// Simple viewport capture - take screenshot of visible area only, no scrolling
+async function captureViewport(tabId) {
+  await ensureTabActive(tabId);
+  await ensureContentScript(tabId);
+  
+  // Get viewport metrics for debugging
+  const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
+  const dpr = metrics?.devicePixelRatio || 1;
+  const expectedWidthPx = (metrics?.viewportWidth || 0) * dpr;
+  const expectedHeightPx = (metrics?.viewportHeight || 0) * dpr;
+  
+  console.log(`[captureViewport] Expected: ${expectedWidthPx}x${expectedHeightPx}px (DPR: ${dpr})`);
+  
+  const dataUrl = await captureVisibleTabForTab(tabId);
+  
+  // Validate captured image dimensions
+  try {
+    const blob = await dataUrlToBlob(dataUrl);
+    const bitmap = await createImageBitmap(blob);
+    console.log(`[captureViewport] Actual: ${bitmap.width}x${bitmap.height}px`);
+    
+    if (bitmap.height < expectedHeightPx * 0.8) {
+      console.warn(`[captureViewport] Viewport may be cropped: ${bitmap.height}px vs ${expectedHeightPx}px expected`);
+    }
+  } catch (e) {
+    console.log(`[captureViewport] Could not validate: ${e?.message}`);
+  }
+  
+  const meta = {
+    type: 'screenshot',
+    mode: 'full',
+    tabId,
+    capturedAt: new Date().toISOString()
+  };
+  await openScreenshotPreview(meta, dataUrl);
+}
+
 async function captureFull(tabId) {
   await ensureTabActive(tabId);
   await ensureContentScript(tabId);
@@ -512,26 +549,32 @@ async function captureFull(tabId) {
   const viewportH = metrics.viewportHeight;
   const viewportW = metrics.viewportWidth;
 
-  const steps = [];
-  for (let y = startY; y < endY; y += viewportH) {
-    steps.push(y);
-  }
-
-  // Scroll + capture each segment
+  // Calculate exact number of steps needed
+  const numSteps = Math.ceil((endY - startY) / viewportH);
   const captured = [];
   const segHeightsPx = [];
 
-  // Capture first image to determine actual pixel width/height
-  for (let i = 0; i < steps.length; i++) {
-    const y = steps[i];
+  // Capture each step WITHOUT going past endY
+  for (let i = 0; i < numSteps; i++) {
+    const y = startY + (i * viewportH);
+    // Stop if we've already captured the entire height
+    if (y >= endY) break;
+
     await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
-    await sleep(220);
+    await sleep(250);
     const dataUrl = await captureVisibleTabForTab(tabId);
     captured.push(dataUrl);
 
-    const remainingCss = Math.max(0, Math.min(viewportH, endY - y));
-    const drawHPx = Math.round(remainingCss * dpr);
+    // Calculate actual pixel height for this segment (might be less than viewportH for last segment)
+    const remainingCss = Math.max(0, endY - y);
+    const segmentHeightCss = Math.min(viewportH, remainingCss);
+    const drawHPx = Math.round(segmentHeightCss * dpr);
     segHeightsPx.push(drawHPx);
+  }
+
+  if (!captured.length) {
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); } catch(e) {}
+    throw new Error('Tidak ada gambar yang berhasil di-capture.');
   }
 
   // Determine widthPx from first captured bitmap
@@ -539,23 +582,25 @@ async function captureFull(tabId) {
   const firstBmp = await createImageBitmap(firstBlob);
   const widthPx = firstBmp.width;
 
-  const totalHeightCss = Math.max(0, endY - startY);
-  const totalHeightPx = Math.round(totalHeightCss * dpr);
+  const totalHeightPx = Math.round(endY * dpr);
 
   // Safety: avoid too large canvas
   if (totalHeightPx > 30000 || widthPx > 30000) {
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); } catch(e) {}
     throw new Error('Halaman terlalu panjang/besar untuk di-stitch. Coba area selection atau bagian tertentu.');
   }
 
   const stitched = await stitchVerticalDataUrls(captured, segHeightsPx, widthPx, totalHeightPx);
 
-  // Restore original scroll
-  await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: metrics.scrollY || 0 });
-  await sleep(120);
+  // Restore state
+  try {
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: 0 });
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' });
+  } catch (e) {}
 
   const meta = {
     type: 'screenshot',
-    mode: 'full',
+    mode: 'scroll',
     tabId,
     capturedAt: new Date().toISOString()
   };
@@ -658,6 +703,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return;
   }
 
+  // Retry Area Screenshot
+  if (request.action === 'RETRY_SCREENSHOT_AREA') {
+    (async () => {
+      try {
+        const tabId = request.tabId;
+        if (!tabId) {
+          sendResponse({ ok: false, error: 'Missing tabId for retry' });
+          return;
+        }
+
+        activeScreenshotFlow = { mode: 'area', tabId, startedAt: Date.now() };
+
+        await ensureTabActive(tabId);
+        await ensureContentScript(tabId);
+        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_START_AREA_SELECT' });
+        sendResponse({ ok: true });
+      } catch (e) {
+        console.error('RETRY_SCREENSHOT_AREA failed:', e);
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+
   // 1. Session Logging
   if (request.action === 'LOG_CAPTURED') {
     if (isRecording) {
@@ -724,7 +793,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
             sendResponse({ status: 'started' });
           } else {
-            sendResponse({ status: 'error', error: response ? response.error : 'Unknown' });
+            isRecording = false; // Reset if cancelled/failed
+            sendResponse({ status: 'error', error: response ? response.error : 'Cancelled or Failed' });
           }
         });
       });
@@ -843,9 +913,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ ok: true });
 
         if (mode === 'full') {
-          await captureFull(tabId);
+          // Full Page mode = viewport only (instant capture)
+          await captureViewport(tabId);
         } else if (mode === 'scroll') {
-          // Default: capture until user clicks ✅ stop
+          // Scroll mode = full page with interactive stop button
           activeScreenshotFlow.scrollStop = false;
           activeScreenshotFlow.scrollCancel = false;
           activeScreenshotFlow.stopAtY = null;
@@ -886,6 +957,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const dataUrl = await captureVisibleTabForTab(tabId);
         const dpr = metrics.devicePixelRatio || 1;
+        
+        const meta = {
+          mode: 'area',
+          capturedAt: new Date().toISOString(),
+          tabId: tabId
+        };
         const cropPx = {
           x: Math.round(rect.x * dpr),
           y: Math.round(rect.y * dpr),
@@ -894,12 +971,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         };
 
         const cropped = await cropDataUrl(dataUrl, cropPx);
-        const meta = {
-          type: 'screenshot',
-          mode: 'area',
-          tabId,
-          capturedAt: new Date().toISOString()
-        };
         await openScreenshotPreview(meta, cropped);
       } catch (e) {
         console.error('SCREENSHOT_AREA_RESULT failed:', e);

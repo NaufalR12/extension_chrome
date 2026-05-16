@@ -283,9 +283,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   btnDownload.addEventListener('click', downloadScreenshot);
   btnSaveToDrive.addEventListener('click', saveScreenshotToDrive);
   btnRetake.addEventListener('click', () => {
-    // Popup cannot be reliably opened as a normal tab.
-    alert('Untuk ulang screenshot, klik ikon BERIBUG di toolbar lalu pilih Screenshot.');
-    window.close();
+    if (pending?.meta?.mode === 'area' && pending?.meta?.tabId) {
+      chrome.runtime.sendMessage({ 
+        action: 'RETRY_SCREENSHOT_AREA', 
+        tabId: pending.meta.tabId 
+      }, (res) => {
+        if (res && res.ok) {
+          window.close();
+        } else {
+          alert('Gagal mengulang screenshot area: ' + (res?.error || 'Unknown error'));
+        }
+      });
+    } else {
+      // For full/scroll, users have to use popup as before, 
+      // but we can at least show a better hint.
+      alert('Untuk ulang screenshot, klik ikon BERIBUG di toolbar lalu pilih mode yang diinginkan.');
+      window.close();
+    }
   });
   btnClosePreview.addEventListener('click', () => window.close());
 });
