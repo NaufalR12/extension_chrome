@@ -570,18 +570,45 @@ async function captureFull(tabId) {
     // Stop if we've already captured the entire height
     if (y >= endY) break;
 
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
+    // Scroll to position and check if we've reached the bottom
+    let scrollResult = null;
+    try {
+      scrollResult = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
+    } catch(e) {
+      console.warn(`[captureFull] Scroll failed:`, e?.message);
+      break;
+    }
+
+    // Check if we couldn't scroll to the target position
+    if (scrollResult && !scrollResult.ok) {
+      console.log(`[captureFull] Scroll failed - likely at bottom. Stopping.`);
+      break;
+    }
+
+    // Check if we didn't actually move (can't scroll further)
+    if (scrollResult && !scrollResult.didScroll && i > 0) {
+      console.log(`[captureFull] Couldn't scroll further at segment ${i}. Stopping.`);
+      break;
+    }
+
     await sleep(300);  // Increased delay for lazy-loading
     const dataUrl = await captureVisibleTabForTab(tabId);
     captured.push(dataUrl);
 
-    // Calculate actual pixel height for this segment
-    const remainingCss = Math.max(0, endY - y);
+    // Calculate actual pixel height for this segment using actual scroll position
+    const actualY = scrollResult?.actualY || y;
+    const remainingCss = Math.max(0, endY - actualY);
     const segmentHeightCss = Math.min(viewportH, remainingCss);
     const segmentHeightPx = Math.round(segmentHeightCss * dpr);
     segHeightsPx.push(segmentHeightPx);
 
-    console.log(`[captureFull] Segment ${i}: scroll=${y}, height=${segmentHeightCss}css/${segmentHeightPx}px`);
+    console.log(`[captureFull] Segment ${i}: scrollTarget=${y}, actual=${actualY}, height=${segmentHeightCss}css/${segmentHeightPx}px, isAtBottom=${scrollResult?.isAtBottom}`);
+
+    // Stop if we've reached the bottom
+    if (scrollResult?.isAtBottom) {
+      console.log(`[captureFull] Stopping - already at bottom`);
+      break;
+    }
   }
 
   if (!captured.length) {
@@ -688,8 +715,33 @@ async function captureScrollInteractive(tabId) {
       }
     }
 
-    // Scroll to position
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
+    // Scroll to position and check if we've reached the bottom
+    let scrollResult = null;
+    try {
+      scrollResult = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
+    } catch(e) {
+      console.warn(`[captureScrollInteractive] Scroll failed:`, e?.message);
+      break;
+    }
+
+    // Check if we couldn't scroll to the target position (we're at the bottom)
+    if (scrollResult && !scrollResult.ok) {
+      console.log(`[captureScrollInteractive] Scroll failed - likely at bottom. Stopping.`);
+      break;
+    }
+
+    // Check if page is at absolute bottom
+    if (scrollResult?.isAtBottom) {
+      console.log(`[captureScrollInteractive] Reached absolute bottom at segment ${i}`);
+      // Capture this final segment before stopping
+    }
+
+    // Check if we didn't actually move (can't scroll further)
+    if (scrollResult && !scrollResult.didScroll && i > 0) {
+      console.log(`[captureScrollInteractive] Couldn't scroll further at segment ${i}. Stopping.`);
+      break;
+    }
+
     await sleep(300);  // Increased delay for lazy-loading to settle
 
     // Hide overlay before capture
@@ -709,12 +761,18 @@ async function captureScrollInteractive(tabId) {
     // Calculate actual segment height for stitching
     // For all segments except the last one, use full viewport height
     // For the last segment, use only the remaining pixels
-    const remainingScrollDistance = Math.max(0, endY - y);
+    const remainingScrollDistance = Math.max(0, endY - (scrollResult?.actualY || y));
     const segmentHeightCss = Math.min(viewportH, remainingScrollDistance);
     const segmentHeightPx = Math.round(segmentHeightCss * dpr);
     segHeightsPx.push(segmentHeightPx);
 
-    console.log(`[captureScrollInteractive] Segment ${i}: scroll=${y}, height=${segmentHeightCss}css/${segmentHeightPx}px`);
+    console.log(`[captureScrollInteractive] Segment ${i}: scrollTarget=${y}, actual=${scrollResult?.actualY || y}, height=${segmentHeightCss}css/${segmentHeightPx}px, isAtBottom=${scrollResult?.isAtBottom}`);
+
+    // Stop if we've reached the bottom
+    if (scrollResult?.isAtBottom) {
+      console.log(`[captureScrollInteractive] Stopping - already at bottom`);
+      break;
+    }
   }
 
   if (!captured.length) {

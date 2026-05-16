@@ -235,7 +235,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   } else if (request.action === 'SCREENSHOT_GET_METRICS') {
     sendResponse(getScreenshotMetrics());
   } else if (request.action === 'SCREENSHOT_SCROLL_TO') {
-    scrollToY(request.y).then(() => sendResponse({ ok: true, y: window.scrollY })).catch((e) => sendResponse({ ok: false, error: e.message }));
+    scrollToY(request.y).then((result) => {
+      sendResponse({ 
+        ok: true, 
+        targetY: result.targetY,
+        actualY: result.actualY,
+        didScroll: result.didScroll,
+        isAtBottom: result.isAtBottom
+      });
+    }).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   } else if (request.action === 'SCREENSHOT_START_AREA_SELECT') {
     startAreaSelectionOverlay();
@@ -311,13 +319,25 @@ function getScreenshotMetrics() {
 
 function scrollToY(y) {
   return new Promise((resolve) => {
+    const beforeScroll = window.scrollY;
     try {
       // 'instant' is not a valid ScrollBehavior in Chrome; use 'auto'.
       window.scrollTo({ top: y, left: 0, behavior: 'auto' });
     } catch (_) {
       window.scrollTo(0, y);
     }
-    requestAnimationFrame(() => setTimeout(() => resolve(), 140));
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        const afterScroll = window.scrollY;
+        // Return actual scroll position after scrolling
+        resolve({
+          targetY: y,
+          actualY: afterScroll,
+          didScroll: afterScroll !== beforeScroll,
+          isAtBottom: (afterScroll + window.innerHeight >= document.body.scrollHeight - 1)
+        });
+      }, 140);
+    });
   });
 }
 
