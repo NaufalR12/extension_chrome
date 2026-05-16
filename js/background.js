@@ -539,37 +539,49 @@ async function captureViewport(tabId) {
 async function captureFull(tabId) {
   await ensureTabActive(tabId);
   await ensureContentScript(tabId);
+
+  try {
+    // Hide fixed/sticky elements for clean screenshots
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_FIXED' });
+  } catch (_) {}
+
   const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
-  if (!metrics || !metrics.viewportHeight) throw new Error('Tidak bisa mengambil ukuran halaman');
+  if (!metrics || !metrics.viewportHeight) {
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); } catch(e) {}
+    throw new Error('Tidak bisa mengambil ukuran halaman');
+  }
 
   const dpr = metrics.devicePixelRatio || 1;
   const startY = 0;
   const endY = metrics.scrollHeight;
-
   const viewportH = metrics.viewportHeight;
-  const viewportW = metrics.viewportWidth;
 
-  // Calculate exact number of steps needed
-  const numSteps = Math.ceil((endY - startY) / viewportH);
+  // Calculate exact number of segments needed
+  const numSegments = Math.ceil((endY - startY) / viewportH);
   const captured = [];
   const segHeightsPx = [];
 
-  // Capture each step WITHOUT going past endY
-  for (let i = 0; i < numSteps; i++) {
+  console.log(`[captureFull] Capturing ${numSegments} segments. Height: ${endY}px (${endY}/${viewportH})`);
+
+  // Capture each segment
+  for (let i = 0; i < numSegments; i++) {
     const y = startY + (i * viewportH);
+    
     // Stop if we've already captured the entire height
     if (y >= endY) break;
 
     await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
-    await sleep(250);
+    await sleep(300);  // Increased delay for lazy-loading
     const dataUrl = await captureVisibleTabForTab(tabId);
     captured.push(dataUrl);
 
-    // Calculate actual pixel height for this segment (might be less than viewportH for last segment)
+    // Calculate actual pixel height for this segment
     const remainingCss = Math.max(0, endY - y);
     const segmentHeightCss = Math.min(viewportH, remainingCss);
-    const drawHPx = Math.round(segmentHeightCss * dpr);
-    segHeightsPx.push(drawHPx);
+    const segmentHeightPx = Math.round(segmentHeightCss * dpr);
+    segHeightsPx.push(segmentHeightPx);
+
+    console.log(`[captureFull] Segment ${i}: scroll=${y}, height=${segmentHeightCss}css/${segmentHeightPx}px`);
   }
 
   if (!captured.length) {
@@ -582,7 +594,10 @@ async function captureFull(tabId) {
   const firstBmp = await createImageBitmap(firstBlob);
   const widthPx = firstBmp.width;
 
-  const totalHeightPx = Math.round(endY * dpr);
+  // Total height = sum of all segment heights
+  const totalHeightPx = segHeightsPx.reduce((sum, h) => sum + h, 0);
+
+  console.log(`[captureFull] Total: ${captured.length} segments, ${widthPx}x${totalHeightPx}px`);
 
   // Safety: avoid too large canvas
   if (totalHeightPx > 30000 || widthPx > 30000) {
@@ -597,6 +612,8 @@ async function captureFull(tabId) {
     await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: 0 });
     await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' });
   } catch (e) {}
+
+  await sleep(120);
 
   const meta = {
     type: 'screenshot',
@@ -614,72 +631,130 @@ async function captureScrollInteractive(tabId) {
   // Show stop UI in page
   try {
     await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_START' });
-  } catch (_) {
-    // ignore
-  }
+  } catch (_) {}
+
+  try {
+    // Hide fixed/sticky elements for clean screenshots
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_FIXED' });
+  } catch (_) {}
 
   const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
-  if (!metrics || !metrics.viewportHeight) throw new Error('Tidak bisa mengambil ukuran halaman');
+  if (!metrics || !metrics.viewportHeight) {
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); } catch(_) {}
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); } catch(_) {}
+    throw new Error('Tidak bisa mengambil ukuran halaman');
+  }
 
   const dpr = metrics.devicePixelRatio || 1;
   const startY = metrics.scrollY || 0;
   const endY = metrics.scrollHeight;
   const viewportH = metrics.viewportHeight;
-
   const captured = [];
   const segHeightsPx = [];
 
-  let lastY = startY;
+  // Pre-calculate exact number of segments needed
+  const totalScrollDistance = endY - startY;
+  const numSegments = Math.ceil(totalScrollDistance / viewportH);
 
-  for (let y = startY; y < endY; y += viewportH) {
-    lastY = y;
+  console.log(`[captureScrollInteractive] Capturing ${numSegments} segments. Start: ${startY}, End: ${endY}, ViewportH: ${viewportH}`);
+
+  // Capture each segment
+  for (let i = 0; i < numSegments; i++) {
+    // Check for cancel/stop before each iteration
     if (!activeScreenshotFlow || activeScreenshotFlow.tabId !== tabId) {
-      throw new Error('Scroll screenshot dibatalkan.');
-    }
-    if (activeScreenshotFlow.scrollCancel) {
+      try { 
+        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); 
+        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); 
+      } catch(_) {}
       throw new Error('Scroll screenshot dibatalkan.');
     }
 
+    if (activeScreenshotFlow.scrollCancel) {
+      try { 
+        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); 
+        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); 
+      } catch(_) {}
+      throw new Error('Scroll screenshot dibatalkan.');
+    }
+
+    const y = startY + (i * viewportH);
+
+    // User clicked stop button
+    if (activeScreenshotFlow.scrollStop) {
+      const stopAt = typeof activeScreenshotFlow.stopAtY === 'number' ? activeScreenshotFlow.stopAtY : y;
+      if (y >= stopAt) {
+        console.log(`[captureScrollInteractive] User stopped at segment ${i}, scroll position ${y}`);
+        break;
+      }
+    }
+
+    // Scroll to position
     await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
-    await sleep(220);
+    await sleep(300);  // Increased delay for lazy-loading to settle
+
+    // Hide overlay before capture
+    try {
+      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' });
+    } catch(_) {}
+
+    // Capture screenshot
     const dataUrl = await captureVisibleTabForTab(tabId);
     captured.push(dataUrl);
 
-    const remainingCss = Math.max(0, Math.min(viewportH, endY - y));
-    const drawHPx = Math.round(remainingCss * dpr);
-    segHeightsPx.push(drawHPx);
+    // Show overlay again
+    try {
+      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_SCROLL_UI' });
+    } catch(_) {}
 
-    if (activeScreenshotFlow.scrollStop) {
-      const stopAt = typeof activeScreenshotFlow.stopAtY === 'number' ? activeScreenshotFlow.stopAtY : y;
-      if (y >= stopAt) break;
-    }
+    // Calculate actual segment height for stitching
+    // For all segments except the last one, use full viewport height
+    // For the last segment, use only the remaining pixels
+    const remainingScrollDistance = Math.max(0, endY - y);
+    const segmentHeightCss = Math.min(viewportH, remainingScrollDistance);
+    const segmentHeightPx = Math.round(segmentHeightCss * dpr);
+    segHeightsPx.push(segmentHeightPx);
+
+    console.log(`[captureScrollInteractive] Segment ${i}: scroll=${y}, height=${segmentHeightCss}css/${segmentHeightPx}px`);
   }
 
-  if (!captured.length) throw new Error('Tidak ada gambar yang berhasil di-capture.');
+  if (!captured.length) {
+    try { 
+      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); 
+      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); 
+    } catch(_) {}
+    throw new Error('Tidak ada gambar yang berhasil di-capture.');
+  }
 
+  // Get image dimensions from first capture
   const firstBlob = await dataUrlToBlob(captured[0]);
   const firstBmp = await createImageBitmap(firstBlob);
   const widthPx = firstBmp.width;
 
-  const lastVisibleCss = Math.max(0, Math.min(viewportH, endY - lastY));
-  const totalHeightCss = (lastY - startY) + lastVisibleCss;
-  const totalHeightPx = Math.round(totalHeightCss * dpr);
+  // Calculate total height: sum of all segment heights
+  const totalHeightPx = segHeightsPx.reduce((sum, h) => sum + h, 0);
 
+  console.log(`[captureScrollInteractive] Total: ${captured.length} segments, ${widthPx}x${totalHeightPx}px`);
+
+  // Safety check
   if (totalHeightPx > 30000 || widthPx > 30000) {
+    try { 
+      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); 
+      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); 
+    } catch(_) {}
     throw new Error('Hasil terlalu panjang/besar. Coba berhenti lebih cepat atau gunakan area selection.');
   }
 
+  // Stitch images
   const stitched = await stitchVerticalDataUrls(captured, segHeightsPx, widthPx, totalHeightPx);
 
-  // Restore original scroll
-  await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: metrics.scrollY || 0 });
-  await sleep(120);
-
+  // Restore page state
   try {
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' });
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: metrics.scrollY || 0 });
     await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' });
-  } catch (_) {
-    // ignore
-  }
+  } catch (_) {}
+
+  await sleep(120);
 
   const meta = {
     type: 'screenshot',

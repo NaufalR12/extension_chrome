@@ -246,6 +246,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   } else if (request.action === 'SCREENSHOT_SCROLL_UI_END') {
     removeScrollStopOverlay();
     sendResponse({ ok: true });
+  } else if (request.action === 'SCREENSHOT_HIDE_FIXED') {
+    hideFixedElements();
+    sendResponse({ ok: true });
+  } else if (request.action === 'SCREENSHOT_SHOW_FIXED') {
+    showFixedElements();
+    sendResponse({ ok: true });
+  } else if (request.action === 'SCREENSHOT_HIDE_SCROLL_UI') {
+    hideScrollStopOverlay();
+    sendResponse({ ok: true });
+  } else if (request.action === 'SCREENSHOT_SHOW_SCROLL_UI') {
+    showScrollStopOverlay();
+    sendResponse({ ok: true });
   }
 });
 
@@ -427,6 +439,61 @@ function removeScrollStopOverlay() {
     __beribugScrollOverlay.remove();
     __beribugScrollOverlay = null;
   }
+}
+
+function hideScrollStopOverlay() {
+  if (__beribugScrollOverlay) {
+    __beribugScrollOverlay.style.display = 'none';
+  }
+}
+
+function showScrollStopOverlay() {
+  if (__beribugScrollOverlay) {
+    __beribugScrollOverlay.style.display = 'flex';
+  }
+}
+
+// Hide fixed/sticky elements during screenshot capture
+// Stores original visibility in dataset so we can restore later
+let __fixedElementsHidden = false;
+const __hiddenElements = [];
+
+function hideFixedElements() {
+  if (__fixedElementsHidden) return;
+  
+  const allElements = document.querySelectorAll('*');
+  for (const el of allElements) {
+    const style = window.getComputedStyle(el);
+    const position = style.position;
+    
+    if (position === 'fixed' || position === 'sticky') {
+      // Store original visibility
+      if (!el.dataset.__origDisplay) {
+        el.dataset.__origDisplay = el.style.display;
+      }
+      el.style.display = 'none';
+      __hiddenElements.push(el);
+    }
+  }
+  
+  __fixedElementsHidden = true;
+}
+
+function showFixedElements() {
+  if (!__fixedElementsHidden) return;
+  
+  for (const el of __hiddenElements) {
+    const origDisplay = el.dataset.__origDisplay;
+    if (origDisplay === undefined || origDisplay === '') {
+      el.style.display = '';
+    } else {
+      el.style.display = origDisplay;
+    }
+    delete el.dataset.__origDisplay;
+  }
+  
+  __hiddenElements.length = 0;
+  __fixedElementsHidden = false;
 }
 
 function startScrollStopOverlay() {
