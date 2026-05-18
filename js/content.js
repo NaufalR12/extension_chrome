@@ -245,6 +245,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
     }).catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
+  } else if (request.action === 'SCREENSHOT_WAIT_STABLE') {
+    waitForStableScroll(request.expectedY, {
+      tolerance: request.tolerance,
+      stableFrames: request.stableFrames,
+      settleFrames: request.settleFrames,
+      maxWaitMs: request.maxWaitMs
+    }).then((metrics) => {
+      sendResponse({ ok: true, metrics });
+    }).catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
   } else if (request.action === 'SCREENSHOT_START_AREA_SELECT') {
     startAreaSelectionOverlay();
     sendResponse({ ok: true });
@@ -333,10 +343,11 @@ function scrollToY(y) {
       requestAnimationFrame(() => {
         setTimeout(() => {
           const afterScroll = window.scrollY;
+          const liveMetrics = getScreenshotMetrics();
           // consider stable if we're within 2px of target or we've tried several times
           const isClose = Math.abs(afterScroll - y) <= 2;
-          const isAtBottom = (afterScroll + window.innerHeight >= document.body.scrollHeight - 1);
-          if (isClose || attempts >= 6) {
+          const isAtBottom = (afterScroll + window.innerHeight >= liveMetrics.scrollHeight - 1);
+          if (isClose || attempts >= 5) {
             resolve({
               targetY: y,
               actualY: afterScroll,
@@ -349,13 +360,88 @@ function scrollToY(y) {
           attempts++;
           // try to nudge scroll again
           try { window.scrollTo({ top: y, left: 0, behavior: 'auto' }); } catch (_) { window.scrollTo(0, y); }
-          // small backoff between attempts
-          setTimeout(checkOnce, 120);
-        }, 160);
+          // small backoff between attempts (faster for responsiveness)
+          setTimeout(checkOnce, 100);
+        }, 140);
       });
     }
 
     checkOnce();
+  });
+}
+
+function waitForAnimationFrames(count) {
+  return new Promise((resolve) => {
+    if (!count || count <= 0) {
+      resolve();
+      return;
+    }
+    let remaining = count;
+    const tick = () => {
+      requestAnimationFrame(() => {
+        remaining -= 1;
+        if (remaining <= 0) {
+          resolve();
+        } else {
+          tick();
+        }
+      });
+    };
+    tick();
+  });
+}
+
+function waitForStableScroll(expectedY, options = {}) {
+  return new Promise((resolve) => {
+    const tolerance = typeof options.tolerance === 'number' ? options.tolerance : 2;
+    const stableFramesTarget = typeof options.stableFrames === 'number' ? options.stableFrames : 3;
+    const settleFrames = typeof options.settleFrames === 'number' ? options.settleFrames : 2;
+    const maxWaitMs = typeof options.maxWaitMs === 'number' ? options.maxWaitMs : 1800;
+
+    const startAt = Date.now();
+    let stableFrames = 0;
+    let last = null;
+
+    const isExpectedReached = (metrics) => {
+      if (typeof expectedY !== 'number') return true;
+      const isAtBottom = metrics.scrollY + metrics.viewportHeight >= metrics.scrollHeight - 1;
+      return Math.abs(metrics.scrollY - expectedY) <= tolerance || isAtBottom;
+    };
+
+    const sameAsLast = (metrics) => {
+      if (!last) return false;
+      return (
+        Math.abs(metrics.scrollY - last.scrollY) <= 1 &&
+        Math.abs(metrics.viewportHeight - last.viewportHeight) <= 1 &&
+        Math.abs(metrics.scrollHeight - last.scrollHeight) <= 1
+      );
+    };
+
+    const loop = () => {
+      requestAnimationFrame(async () => {
+        const metrics = getScreenshotMetrics();
+        const expectedReached = isExpectedReached(metrics);
+
+        if (sameAsLast(metrics) && expectedReached) {
+          stableFrames += 1;
+        } else {
+          stableFrames = expectedReached ? 1 : 0;
+        }
+
+        last = metrics;
+
+        const timedOut = Date.now() - startAt >= maxWaitMs;
+        if (stableFrames >= stableFramesTarget || timedOut) {
+          await waitForAnimationFrames(settleFrames);
+          resolve(getScreenshotMetrics());
+          return;
+        }
+
+        loop();
+      });
+    };
+
+    loop();
   });
 }
 

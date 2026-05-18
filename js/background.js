@@ -536,192 +536,253 @@ async function captureViewport(tabId) {
   await openScreenshotPreview(meta, dataUrl);
 }
 
-async function captureFull(tabId) {
+async function getLiveScreenshotMetrics(tabId) {
+  const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
+  if (!metrics || !metrics.viewportHeight) {
+    throw new Error('Tidak bisa mengambil ukuran halaman');
+  }
+  return metrics;
+}
+
+async function waitForScrollStable(tabId, expectedY = null, options = {}) {
+  const res = await chrome.tabs.sendMessage(tabId, {
+    action: 'SCREENSHOT_WAIT_STABLE',
+    expectedY,
+    tolerance: options.tolerance ?? 2,
+    stableFrames: options.stableFrames ?? 3,
+    settleFrames: options.settleFrames ?? 2,
+    maxWaitMs: options.maxWaitMs ?? 1800
+  });
+
+  if (!res || !res.ok || !res.metrics) {
+    throw new Error(res?.error || 'Gagal menunggu scroll stabil');
+  }
+
+  return res.metrics;
+}
+
+async function ensureTopAndCaptureFirstFrame(tabId, interactiveUi) {
+  let topMetrics = null;
+
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: 0 });
+    topMetrics = await waitForScrollStable(tabId, 0, {
+      tolerance: 2,
+      stableFrames: 4,
+      settleFrames: 3,
+      maxWaitMs: 2200
+    });
+
+    if (Math.abs((topMetrics.scrollY || 0)) <= 2) {
+      break;
+    }
+
+    if (attempt === 6) {
+      throw new Error('Tidak bisa memulai capture dari paling atas halaman secara stabil.');
+    }
+  }
+
+  if (interactiveUi) {
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' }); } catch (_) {}
+  }
+  await sleep(40);
+  const firstDataUrl = await captureVisibleTabForTab(tabId);
+  if (interactiveUi) {
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_SCROLL_UI' }); } catch (_) {}
+  }
+
+  return {
+    dataUrl: firstDataUrl,
+    scrollY: topMetrics.scrollY || 0,
+    viewportHeight: topMetrics.viewportHeight,
+    scrollHeight: topMetrics.scrollHeight
+  };
+}
+
+async function stitchByActualScrollPositions(frames) {
+  if (!frames || !frames.length) {
+    throw new Error('Tidak ada frame untuk stitching');
+  }
+
+  const processedUrls = [];
+  const processedHeightsPx = [];
+  let totalHeightPx = 0;
+  let widthPx = 0;
+  let coveredBottomCss = null;
+
+  for (let i = 0; i < frames.length; i++) {
+    const frame = frames[i];
+    const blob = await dataUrlToBlob(frame.dataUrl);
+    const bmp = await createImageBitmap(blob);
+
+    if (!widthPx) widthPx = bmp.width;
+
+    const viewportCss = Math.max(1, frame.viewportHeight || 1);
+    const scrollY = Math.max(0, frame.scrollY || 0);
+    const scrollHeight = Math.max(viewportCss, frame.scrollHeight || viewportCss);
+
+    if (coveredBottomCss === null) {
+      coveredBottomCss = scrollY;
+    }
+
+    const duplicateTopCss = i === 0
+      ? 0
+      : Math.max(0, coveredBottomCss - scrollY);
+
+    const maxVisibleBottomCss = Math.max(0, scrollHeight - scrollY);
+    const remainingVisibleCss = Math.max(0, viewportCss - duplicateTopCss);
+    const takeCss = Math.min(remainingVisibleCss, maxVisibleBottomCss);
+
+    if (takeCss <= 0) {
+      continue;
+    }
+
+    const cssToPx = bmp.height / viewportCss;
+    let cropTopPx = Math.round(duplicateTopCss * cssToPx);
+    cropTopPx = Math.max(0, Math.min(cropTopPx, bmp.height - 1));
+
+    let cropHeightPx = Math.round(takeCss * cssToPx);
+    cropHeightPx = Math.max(1, Math.min(cropHeightPx, bmp.height - cropTopPx));
+
+    let outUrl = frame.dataUrl;
+    if (cropTopPx > 0 || cropHeightPx < bmp.height) {
+      outUrl = await cropDataUrl(frame.dataUrl, {
+        x: 0,
+        y: cropTopPx,
+        width: bmp.width,
+        height: cropHeightPx
+      });
+    }
+
+    processedUrls.push(outUrl);
+    processedHeightsPx.push(cropHeightPx);
+    totalHeightPx += cropHeightPx;
+
+    const appendedEndCss = scrollY + duplicateTopCss + (cropHeightPx / cssToPx);
+    coveredBottomCss = Math.max(coveredBottomCss, appendedEndCss);
+  }
+
+  if (!processedUrls.length || !widthPx || !totalHeightPx) {
+    throw new Error('Gagal menyiapkan frame untuk stitching');
+  }
+
+  if (totalHeightPx > 30000 || widthPx > 30000) {
+    throw new Error('Hasil terlalu panjang/besar untuk di-stitch. Coba area selection atau bagian tertentu.');
+  }
+
+  return await stitchVerticalDataUrls(processedUrls, processedHeightsPx, widthPx, totalHeightPx);
+}
+
+async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
   await ensureTabActive(tabId);
   await ensureContentScript(tabId);
 
+  let originalScrollY = 0;
   try {
-    // Hide fixed/sticky elements for clean screenshots
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_FIXED' });
+    const initialMetrics = await getLiveScreenshotMetrics(tabId);
+    originalScrollY = initialMetrics.scrollY || 0;
   } catch (_) {}
 
-  // IMPORTANT: Scroll to top first to capture from the beginning
-  console.log(`[captureFull] Scrolling to top first...`);
-  try {
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: 0 });
-  } catch (_) {}
-  
-  // Wait for page to settle at top
-  await sleep(400);
-
-  const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
-  if (!metrics || !metrics.viewportHeight) {
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); } catch(e) {}
-    throw new Error('Tidak bisa mengambil ukuran halaman');
+  if (interactiveUi) {
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_START' }); } catch (_) {}
   }
 
-  const dpr = metrics.devicePixelRatio || 1;
-  const startY = 0;  // Always start from top
-  const endY = metrics.scrollHeight;
-  const viewportH = metrics.viewportHeight;
+  const frames = [];
 
-  // Use a fixed 100px crop overlap per frame for stable stitching
-  const CROP_OVERLAP_CSS = 100; // px, consistent across all frames
-  const step = viewportH - CROP_OVERLAP_CSS;
-  const numSegments = Math.max(1, Math.ceil((endY - startY) / step));
-  const captured = [];
-  const positions = [];
+  try {
+    const firstFrame = await ensureTopAndCaptureFirstFrame(tabId, interactiveUi);
+    frames.push(firstFrame);
 
-  console.log(`[captureFull] Capturing ${numSegments} segments (step=${step}, cropOverlap=${CROP_OVERLAP_CSS}px). FullHeight: ${endY}px`);
+    for (let i = 0; i < 400; i++) {
+      if (interactiveUi) {
+        if (!activeScreenshotFlow || activeScreenshotFlow.tabId !== tabId || activeScreenshotFlow.scrollCancel) {
+          throw new Error('Scroll screenshot dibatalkan.');
+        }
 
-  for (let i = 0; i < numSegments; i++) {
-    const targetY = Math.min(startY + (i * step), endY);
-
-    // Stop if we've already captured the entire height
-    if (targetY > endY) break;
-
-    // Scroll to position and check if we've reached the bottom
-    // Ensure scroll actually reaches/stabilizes at targetY before capture. Retry a few times if needed.
-    let scrollResult = null;
-    let attempt = 0;
-    while (attempt < 8) {
-      attempt++;
-      try {
-        scrollResult = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: targetY });
-      } catch (e) {
-        console.warn(`[captureFull] Scroll failed attempt ${attempt}:`, e?.message);
-        await sleep(180);
-        continue;
+        if (activeScreenshotFlow.scrollStop) {
+          break;
+        }
       }
 
-      if (!scrollResult || !scrollResult.ok) {
-        console.log(`[captureFull] Scroll not ok on attempt ${attempt}.`);
-        await sleep(180);
-        continue;
-      }
+      const previous = frames[frames.length - 1];
+      const live = await getLiveScreenshotMetrics(tabId);
+      const viewportH = live.viewportHeight;
+      const capturedBottom = previous.scrollY + previous.viewportHeight;
+      const liveScrollHeight = live.scrollHeight;
 
-      const actual = typeof scrollResult.actualY === 'number' ? scrollResult.actualY : targetY;
-      const delta = Math.abs(actual - targetY);
-      if (delta <= 2 || scrollResult.isAtBottom) {
-        // good enough
+      if (capturedBottom >= liveScrollHeight - 1) {
         break;
       }
 
-      // otherwise retry to nudge into position
-      await sleep(160);
-    }
+      const step = Math.max(1, Math.round(viewportH * 0.92));
+      const maxTopY = Math.max(0, liveScrollHeight - viewportH);
+      const targetY = Math.min(previous.scrollY + step, maxTopY);
 
-    if (!scrollResult || !scrollResult.ok) {
-      console.log(`[captureFull] Scroll failed completely for target ${targetY}. Stopping.`);
-      break;
-    }
-
-    // If we couldn't scroll further and this isn't the first segment, stop to avoid duplicates
-    if (!scrollResult.didScroll && i > 0) {
-      console.log(`[captureFull] Couldn't scroll further at segment ${i}. Stopping.`);
-      break;
-    }
-
-    // Allow lazy-loaded content to settle further
-    await sleep(300);
-
-    const actualY = typeof scrollResult.actualY === 'number' ? scrollResult.actualY : targetY;
-    
-    // Hide any UI overlays before capture
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' }); } catch(_) {}
-    await sleep(100); // ensure overlay is hidden before screenshot
-
-    // Capture visible tab
-    const dataUrl = await captureVisibleTabForTab(tabId);
-    captured.push(dataUrl);
-    positions.push(actualY);
-
-    // Keep overlay hidden (don't show until all capture done)
-
-    console.log(`[captureFull] Segment ${i}: targetY=${targetY}, actualY=${positions[positions.length-1]}, isAtBottom=${scrollResult?.isAtBottom}`);
-
-    if (scrollResult.isAtBottom) {
-      console.log(`[captureFull] Reached absolute bottom at segment ${i}`);
-      break;
-    }
-  }
-
-  if (!captured.length) {
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); } catch(e) {}
-    throw new Error('Tidak ada gambar yang berhasil di-capture.');
-  }
-
-  // Determine widthPx from first captured bitmap
-  const firstBlob = await dataUrlToBlob(captured[0]);
-  const firstBmp = await createImageBitmap(firstBlob);
-  const widthPx = firstBmp.width;
-
-  // Crop overlapping top area from subsequent images so stitching doesn't duplicate headers/footers
-  const overlapPx = Math.round(Math.min(Math.round(viewportH * 0.1), 200) * dpr);
-  const processed = [];
-  const processedHeights = [];
-
-  // First image: keep full
-  processed.push(captured[0]);
-  processedHeights.push(firstBmp.height);
-
-  for (let i = 1; i < captured.length; i++) {
-    try {
-      const blob = await dataUrlToBlob(captured[i]);
-      const bmp = await createImageBitmap(blob);
-      // For all frames except last: crop fixed CROP_OVERLAP_CSS px from top
-      const isLastFrame = (i === captured.length - 1);
-      let cropTop, cropH;
-      
-      if (isLastFrame) {
-        // Last frame: only keep area that extends beyond previous frames
-        const lastVisibleY = positions[i-1];
-        const currentBottomY = positions[i] + viewportH;
-        const newAreaHeight = Math.max(0, currentBottomY - (lastVisibleY + viewportH));
-        cropTop = Math.round((viewportH - newAreaHeight) * dpr);
-        cropH = Math.round(newAreaHeight * dpr);
-      } else {
-        // Middle frames: crop fixed overlap from top
-        cropTop = Math.round(CROP_OVERLAP_CSS * dpr);
-        cropH = Math.max(1, bmp.height - cropTop);
+      const scrollResult = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: targetY });
+      if (!scrollResult || !scrollResult.ok) {
+        break;
       }
-      
-      cropH = Math.max(1, Math.min(cropH, bmp.height - cropTop));
-      const cropped = await cropDataUrl(captured[i], { x: 0, y: cropTop, width: bmp.width, height: cropH });
-      processed.push(cropped);
-      processedHeights.push(cropH);
-      
-      console.log(`[captureFull] Frame ${i}: cropTop=${cropTop}px, cropH=${cropH}px, isLastFrame=${isLastFrame}`);
-    } catch (e) {
-      const blob = await dataUrlToBlob(captured[i]);
-      const bmp = await createImageBitmap(blob);
-      processed.push(captured[i]);
-      processedHeights.push(bmp.height);
-      console.log(`[captureFull] Frame ${i}: crop failed, using full frame ${bmp.height}px`);
+
+      const stable = await waitForScrollStable(tabId, targetY, {
+        tolerance: 2,
+        stableFrames: 3,
+        settleFrames: 2,
+        maxWaitMs: 1800
+      });
+
+      const currentY = stable.scrollY || scrollResult.actualY || targetY;
+      const currentViewportH = stable.viewportHeight || viewportH;
+      const currentScrollHeight = stable.scrollHeight || liveScrollHeight;
+      const currentCapturedBottom = currentY + currentViewportH;
+
+      if (currentY <= previous.scrollY + 1 && currentCapturedBottom <= capturedBottom + 1) {
+        if (currentCapturedBottom >= currentScrollHeight - 1) {
+          break;
+        }
+        break;
+      }
+
+      if (interactiveUi) {
+        try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' }); } catch (_) {}
+      }
+      await sleep(30);
+      const dataUrl = await captureVisibleTabForTab(tabId);
+      if (interactiveUi) {
+        try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_SCROLL_UI' }); } catch (_) {}
+      }
+
+      frames.push({
+        dataUrl,
+        scrollY: currentY,
+        viewportHeight: currentViewportH,
+        scrollHeight: currentScrollHeight
+      });
+
+      if (currentCapturedBottom >= currentScrollHeight - 1) {
+        break;
+      }
     }
+
+    if (!frames.length) {
+      throw new Error('Tidak ada gambar yang berhasil di-capture.');
+    }
+
+    return await stitchByActualScrollPositions(frames);
+  } finally {
+    try {
+      if (interactiveUi) {
+        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' });
+      }
+      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: originalScrollY });
+      if (interactiveUi) {
+        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' });
+      }
+    } catch (_) {}
   }
+}
 
-  const totalHeightPx = processedHeights.reduce((s, h) => s + h, 0);
-
-  console.log(`[captureFull] Total: ${captured.length} segments, ${widthPx}x${totalHeightPx}px`);
-
-  // Safety: avoid too large canvas
-  if (totalHeightPx > 30000 || widthPx > 30000) {
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); } catch(e) {}
-    throw new Error('Halaman terlalu panjang/besar untuk di-stitch. Coba area selection atau bagian tertentu.');
-  }
-
-  const stitched = await stitchVerticalDataUrls(processed, processedHeights, widthPx, totalHeightPx);
-
-  // Restore state
-  try {
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' }); // ensure hidden
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: 0 });
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' });
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_SCROLL_UI' }); // only show after all done
-  } catch (e) {}
-
-  await sleep(120);
+async function captureFull(tabId) {
+  const stitched = await captureScrollWithActualStitching(tabId, false);
 
   const meta = {
     type: 'screenshot',
@@ -733,193 +794,7 @@ async function captureFull(tabId) {
 }
 
 async function captureScrollInteractive(tabId) {
-  await ensureTabActive(tabId);
-  await ensureContentScript(tabId);
-
-  // Show stop UI in page
-  try {
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_START' });
-  } catch (_) {}
-
-  try {
-    // Hide fixed/sticky elements for clean screenshots
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_FIXED' });
-  } catch (_) {}
-
-  // IMPORTANT: Scroll to top first to capture from the beginning
-  console.log(`[captureScrollInteractive] Scrolling to top first...`);
-  try {
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: 0 });
-  } catch (_) {}
-  
-  // Wait for page to settle at top
-  await sleep(400);
-
-  const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
-  if (!metrics || !metrics.viewportHeight) {
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); } catch(_) {}
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); } catch(_) {}
-    throw new Error('Tidak bisa mengambil ukuran halaman');
-  }
-
-  const dpr = metrics.devicePixelRatio || 1;
-  const startY = 0;  // Always start from top
-  const endY = metrics.scrollHeight;
-  const viewportH = metrics.viewportHeight;
-  const CROP_OVERLAP_CSS = 100; // Fixed 100px overlap
-  const step = viewportH - CROP_OVERLAP_CSS;
-  const totalScrollDistance = Math.max(0, endY - startY);
-  const numSegments = Math.max(1, Math.ceil(totalScrollDistance / step));
-  const captured = [];
-  const positions = [];
-
-  console.log(`[captureScrollInteractive] Capturing up to ${numSegments} segments (step=${step}, cropOverlap=${CROP_OVERLAP_CSS}px). Start: ${startY}, End: ${endY}`);
-
-  // Capture each segment
-  for (let i = 0; i < numSegments; i++) {
-    // Check for cancel/stop before each iteration
-    if (!activeScreenshotFlow || activeScreenshotFlow.tabId !== tabId) {
-      try { 
-        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); 
-        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); 
-      } catch(_) {}
-      throw new Error('Scroll screenshot dibatalkan.');
-    }
-
-    if (activeScreenshotFlow.scrollCancel) {
-      try { 
-        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); 
-        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); 
-      } catch(_) {}
-      throw new Error('Scroll screenshot dibatalkan.');
-    }
-
-    const y = Math.min(startY + (i * step), endY);
-
-    // Ensure scroll reaches/stabilizes at y before capture
-    let scrollResult = null;
-    let attempt = 0;
-    while (attempt < 8) {
-      attempt++;
-      try {
-        scrollResult = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y });
-      } catch (e) {
-        console.warn(`[captureScrollInteractive] Scroll failed attempt ${attempt}:`, e?.message);
-        await sleep(160);
-        continue;
-      }
-
-      if (!scrollResult || !scrollResult.ok) {
-        await sleep(160);
-        continue;
-      }
-
-      const actual = typeof scrollResult.actualY === 'number' ? scrollResult.actualY : y;
-      if (Math.abs(actual - y) <= 2 || scrollResult.isAtBottom) break;
-      await sleep(120);
-    }
-
-    if (!scrollResult || !scrollResult.ok) {
-      console.log(`[captureScrollInteractive] Scroll failed completely for target ${y}. Stopping.`);
-      break;
-    }
-
-    if (!scrollResult.didScroll && i > 0) {
-      console.log(`[captureScrollInteractive] Couldn't scroll further at segment ${i}. Stopping.`);
-      break;
-    }
-
-    await sleep(300);
-
-    const actualY = typeof scrollResult.actualY === 'number' ? scrollResult.actualY : y;
-    
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' }); } catch(_) {}
-    await sleep(100); // ensure overlay is hidden before screenshot
-    const dataUrl = await captureVisibleTabForTab(tabId);
-    captured.push(dataUrl);
-    // Keep overlay hidden
-    positions.push(actualY);
-  }
-
-  if (!captured.length) {
-    try { 
-      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); 
-      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); 
-    } catch(_) {}
-    throw new Error('Tidak ada gambar yang berhasil di-capture.');
-  }
-
-  // Get image dimensions from first capture
-  const firstBlob = await dataUrlToBlob(captured[0]);
-  const firstBmp = await createImageBitmap(firstBlob);
-  const widthPx = firstBmp.width;
-
-  // Crop overlapping top area from subsequent images so stitching doesn't duplicate headers/footers
-  const overlapPx = Math.round(Math.min(Math.round(viewportH * 0.1), 200) * dpr);
-  const processed = [];
-  const processedHeights = [];
-
-  // First image: keep full
-  processed.push(captured[0]);
-  processedHeights.push(firstBmp.height);
-
-  for (let i = 1; i < captured.length; i++) {
-    try {
-      const blob = await dataUrlToBlob(captured[i]);
-      const bmp = await createImageBitmap(blob);
-      const isLastFrame = (i === captured.length - 1);
-      let cropTop, cropH;
-      
-      if (isLastFrame) {
-        const lastVisibleY = positions[i-1];
-        const currentBottomY = positions[i] + viewportH;
-        const newAreaHeight = Math.max(0, currentBottomY - (lastVisibleY + viewportH));
-        cropTop = Math.round((viewportH - newAreaHeight) * dpr);
-        cropH = Math.round(newAreaHeight * dpr);
-      } else {
-        cropTop = Math.round(CROP_OVERLAP_CSS * dpr);
-        cropH = Math.max(1, bmp.height - cropTop);
-      }
-      
-      cropH = Math.max(1, Math.min(cropH, bmp.height - cropTop));
-      const cropped = await cropDataUrl(captured[i], { x: 0, y: cropTop, width: bmp.width, height: cropH });
-      processed.push(cropped);
-      processedHeights.push(cropH);
-      console.log(`[captureScrollInteractive] Frame ${i}: cropTop=${cropTop}px, cropH=${cropH}px, isLastFrame=${isLastFrame}`);
-    } catch (e) {
-      const blob = await dataUrlToBlob(captured[i]);
-      const bmp = await createImageBitmap(blob);
-      processed.push(captured[i]);
-      processedHeights.push(bmp.height);
-      console.log(`[captureScrollInteractive] Frame ${i}: crop failed, using full frame ${bmp.height}px`);
-    }
-  }
-
-  const totalHeightPx = processedHeights.reduce((sum, h) => sum + h, 0);
-
-  console.log(`[captureScrollInteractive] Total: ${captured.length} segments, ${widthPx}x${totalHeightPx}px`);
-
-  // Safety check
-  if (totalHeightPx > 30000 || widthPx > 30000) {
-    try { 
-      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' }); 
-      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' }); 
-    } catch(_) {}
-    throw new Error('Hasil terlalu panjang/besar. Coba berhenti lebih cepat atau gunakan area selection.');
-  }
-
-  // Stitch images (use processed cropped images)
-  const stitched = await stitchVerticalDataUrls(processed, processedHeights, widthPx, totalHeightPx);
-
-  // Restore page state
-  try {
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' }); // ensure hidden
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FIXED' });
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: metrics.scrollY || 0 });
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_SCROLL_UI' });
-  } catch (_) {}
-
-  await sleep(120);
+  const stitched = await captureScrollWithActualStitching(tabId, true);
 
   const meta = {
     type: 'screenshot',
