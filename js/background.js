@@ -599,70 +599,145 @@ async function ensureTopAndCaptureFirstFrame(tabId, interactiveUi) {
   };
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function rgbDiff(dataA, dataB, width, height, rowOffsetB, sampleStepX = 6, sampleStepY = 3) {
+  let score = 0;
+  let count = 0;
+  const stride = width * 4;
+
+  for (let y = 0; y < height; y += sampleStepY) {
+    const rowA = y * stride;
+    const rowB = (rowOffsetB + y) * stride;
+    for (let x = 0; x < width; x += sampleStepX) {
+      const idxA = rowA + (x * 4);
+      const idxB = rowB + (x * 4);
+
+      score += Math.abs(dataA[idxA] - dataB[idxB]);
+      score += Math.abs(dataA[idxA + 1] - dataB[idxB + 1]);
+      score += Math.abs(dataA[idxA + 2] - dataB[idxB + 2]);
+      count += 3;
+    }
+  }
+
+  return count ? (score / count) : Number.POSITIVE_INFINITY;
+}
+
+async function findBestVisualOverlapPx(prevBmp, currBmp, predictedOverlapPx) {
+  const width = Math.min(prevBmp.width, currBmp.width);
+  const prevH = prevBmp.height;
+  const currH = currBmp.height;
+
+  if (width < 40 || prevH < 80 || currH < 80) {
+    return clamp(predictedOverlapPx || Math.round(currH * 0.2), 1, Math.max(1, currH - 1));
+  }
+
+  const bandH = clamp(Math.round(Math.min(prevH, currH) * 0.12), 72, 220);
+  const minOverlap = clamp(Math.round(currH * 0.08), 20, Math.max(20, currH - 1));
+  const maxOverlap = clamp(Math.round(currH * 0.6), minOverlap + 1, Math.max(minOverlap + 1, currH - 1));
+  const predicted = clamp(
+    typeof predictedOverlapPx === 'number' ? predictedOverlapPx : Math.round(currH * 0.2),
+    minOverlap,
+    maxOverlap
+  );
+
+  const searchRadius = clamp(Math.round(currH * 0.22), 110, 360);
+  const candidateMin = clamp(predicted - searchRadius, minOverlap, maxOverlap);
+  const candidateMax = clamp(predicted + searchRadius, candidateMin, maxOverlap);
+
+  if (candidateMax - candidateMin < 3 || candidateMin < bandH) {
+    return clamp(predicted, bandH, maxOverlap);
+  }
+
+  const prevCanvas = new OffscreenCanvas(width, prevH);
+  const prevCtx = prevCanvas.getContext('2d', { willReadFrequently: true });
+  prevCtx.drawImage(prevBmp, 0, 0, width, prevH, 0, 0, width, prevH);
+  const prevBandData = prevCtx.getImageData(0, prevH - bandH, width, bandH).data;
+
+  const currCanvas = new OffscreenCanvas(width, currH);
+  const currCtx = currCanvas.getContext('2d', { willReadFrequently: true });
+  currCtx.drawImage(currBmp, 0, 0, width, currH, 0, 0, width, currH);
+
+  const regionTop = candidateMin - bandH;
+  const regionHeight = (candidateMax - candidateMin) + bandH;
+  const currRegion = currCtx.getImageData(0, regionTop, width, regionHeight).data;
+
+  let bestOverlap = predicted;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let overlap = candidateMin; overlap <= candidateMax; overlap += 2) {
+    const bandStartRow = overlap - bandH - regionTop;
+    if (bandStartRow < 0 || (bandStartRow + bandH) > regionHeight) {
+      continue;
+    }
+
+    const score = rgbDiff(prevBandData, currRegion, width, bandH, bandStartRow, 7, 3);
+    if (score < bestScore) {
+      bestScore = score;
+      bestOverlap = overlap;
+    }
+  }
+
+  return clamp(bestOverlap, minOverlap, maxOverlap);
+}
+
 async function stitchByActualScrollPositions(frames) {
   if (!frames || !frames.length) {
     throw new Error('Tidak ada frame untuk stitching');
   }
 
-  const processedUrls = [];
-  const processedHeightsPx = [];
-  let totalHeightPx = 0;
-  let widthPx = 0;
-  let coveredBottomCss = null;
-
-  for (let i = 0; i < frames.length; i++) {
-    const frame = frames[i];
+  const bitmaps = [];
+  for (const frame of frames) {
     const blob = await dataUrlToBlob(frame.dataUrl);
     const bmp = await createImageBitmap(blob);
+    bitmaps.push(bmp);
+  }
 
-    if (!widthPx) widthPx = bmp.width;
+  const firstFrame = frames[0];
+  const firstBmp = bitmaps[0];
+  const lockedScalePxPerCss = firstBmp.height / Math.max(1, firstFrame.viewportHeight || 1);
 
-    const viewportCss = Math.max(1, frame.viewportHeight || 1);
-    const scrollY = Math.max(0, frame.scrollY || 0);
-    const scrollHeight = Math.max(viewportCss, frame.scrollHeight || viewportCss);
+  const processedUrls = [firstFrame.dataUrl];
+  const processedHeightsPx = [firstBmp.height];
+  let totalHeightPx = firstBmp.height;
+  const widthPx = firstBmp.width;
 
-    if (coveredBottomCss === null) {
-      coveredBottomCss = scrollY;
-    }
+  for (let i = 1; i < frames.length; i++) {
+    const prev = frames[i - 1];
+    const curr = frames[i];
+    const prevBmp = bitmaps[i - 1];
+    const currBmp = bitmaps[i];
 
-    const duplicateTopCss = i === 0
-      ? 0
-      : Math.max(0, coveredBottomCss - scrollY);
+    const predictedOverlapCss = Math.max(0, (prev.scrollY + prev.viewportHeight) - curr.scrollY);
+    const predictedOverlapPx = Math.round(predictedOverlapCss * lockedScalePxPerCss);
+    const bestOverlapPx = await findBestVisualOverlapPx(prevBmp, currBmp, predictedOverlapPx);
 
-    const maxVisibleBottomCss = Math.max(0, scrollHeight - scrollY);
-    const remainingVisibleCss = Math.max(0, viewportCss - duplicateTopCss);
-    const takeCss = Math.min(remainingVisibleCss, maxVisibleBottomCss);
+    const maxVisibleCss = Math.max(0, Math.min(curr.viewportHeight, curr.scrollHeight - curr.scrollY));
+    const maxVisiblePx = clamp(
+      Math.round(maxVisibleCss * lockedScalePxPerCss),
+      1,
+      currBmp.height
+    );
 
-    if (takeCss <= 0) {
-      continue;
-    }
+    const cropTopPx = clamp(bestOverlapPx, 0, currBmp.height - 1);
+    const maxAppendPx = Math.max(1, maxVisiblePx - cropTopPx);
+    const cropHeightPx = clamp(maxAppendPx, 1, currBmp.height - cropTopPx);
 
-    const cssToPx = bmp.height / viewportCss;
-    let cropTopPx = Math.round(duplicateTopCss * cssToPx);
-    cropTopPx = Math.max(0, Math.min(cropTopPx, bmp.height - 1));
-
-    let cropHeightPx = Math.round(takeCss * cssToPx);
-    cropHeightPx = Math.max(1, Math.min(cropHeightPx, bmp.height - cropTopPx));
-
-    let outUrl = frame.dataUrl;
-    if (cropTopPx > 0 || cropHeightPx < bmp.height) {
-      outUrl = await cropDataUrl(frame.dataUrl, {
-        x: 0,
-        y: cropTopPx,
-        width: bmp.width,
-        height: cropHeightPx
-      });
-    }
+    const outUrl = await cropDataUrl(curr.dataUrl, {
+      x: 0,
+      y: cropTopPx,
+      width: currBmp.width,
+      height: cropHeightPx
+    });
 
     processedUrls.push(outUrl);
     processedHeightsPx.push(cropHeightPx);
     totalHeightPx += cropHeightPx;
-
-    const appendedEndCss = scrollY + duplicateTopCss + (cropHeightPx / cssToPx);
-    coveredBottomCss = Math.max(coveredBottomCss, appendedEndCss);
   }
 
-  if (!processedUrls.length || !widthPx || !totalHeightPx) {
+  if (!processedUrls.length || !totalHeightPx) {
     throw new Error('Gagal menyiapkan frame untuk stitching');
   }
 
@@ -690,6 +765,8 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
   const frames = [];
 
   try {
+    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_FLOATING' }); } catch (_) {}
+
     const firstFrame = await ensureTopAndCaptureFirstFrame(tabId, interactiveUi);
     frames.push(firstFrame);
 
@@ -714,7 +791,7 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
         break;
       }
 
-      const step = Math.max(1, Math.round(viewportH * 0.92));
+      const step = Math.max(1, Math.round(viewportH * 0.8));
       const maxTopY = Math.max(0, liveScrollHeight - viewportH);
       const targetY = Math.min(previous.scrollY + step, maxTopY);
 
@@ -773,6 +850,7 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
       if (interactiveUi) {
         await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' });
       }
+      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FLOATING' });
       await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: originalScrollY });
       if (interactiveUi) {
         await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' });

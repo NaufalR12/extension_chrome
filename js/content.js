@@ -276,6 +276,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   } else if (request.action === 'SCREENSHOT_SHOW_SCROLL_UI') {
     showScrollStopOverlay();
     sendResponse({ ok: true });
+  } else if (request.action === 'SCREENSHOT_HIDE_FLOATING') {
+    hideTransientFloatingElements();
+    sendResponse({ ok: true });
+  } else if (request.action === 'SCREENSHOT_SHOW_FLOATING') {
+    showTransientFloatingElements();
+    sendResponse({ ok: true });
   }
 });
 
@@ -447,6 +453,98 @@ function waitForStableScroll(expectedY, options = {}) {
 
 let __beribugShotOverlay = null;
 let __beribugScrollOverlay = null;
+let __transientFloatingHidden = false;
+const __hiddenFloatingElements = [];
+
+function isLikelyLayoutAnchor(el, rect, vw, vh) {
+  const tag = (el.tagName || '').toLowerCase();
+  if (tag === 'header' || tag === 'nav' || tag === 'main' || tag === 'aside') return true;
+  if (el.closest('header, nav, main')) return true;
+
+  const nearTop = rect.top <= 8;
+  const veryWide = rect.width >= vw * 0.8;
+  const tallEnough = rect.height >= 40;
+  if (nearTop && veryWide && tallEnough) return true;
+
+  const hugeContainer = rect.width >= vw * 0.7 && rect.height >= vh * 0.6;
+  if (hugeContainer) return true;
+
+  return false;
+}
+
+function isLikelyFloatingNoise(el, rect, computed, vw, vh) {
+  const idAndClass = `${el.id || ''} ${(el.className || '').toString()}`.toLowerCase();
+  const aria = `${el.getAttribute('aria-label') || ''} ${el.getAttribute('role') || ''}`.toLowerCase();
+  const text = `${idAndClass} ${aria}`;
+  const hint = /share|social|floating|float|sticky|widget|chat|wa|whatsapp|intercom|crisp|drift|cta|subscribe|promo|banner|ads|ad-|sponsor|popup/.test(text);
+
+  const pos = computed.position;
+  const zIndex = Number.parseInt(computed.zIndex || '0', 10);
+  const highZ = Number.isFinite(zIndex) && zIndex >= 20;
+
+  const nearEdge = rect.left <= 120 || rect.top <= 120 || rect.right >= (vw - 120) || rect.bottom >= (vh - 120);
+  const smallBox = rect.width <= vw * 0.45 && rect.height <= vh * 0.5;
+  const mediumBox = rect.width <= vw * 0.6 && rect.height <= vh * 0.6;
+
+  if (pos === 'fixed') {
+    if (hint && mediumBox) return true;
+    if (highZ && nearEdge && smallBox) return true;
+  }
+
+  if (pos === 'sticky') {
+    if (hint && nearEdge && smallBox) return true;
+  }
+
+  return false;
+}
+
+function hideTransientFloatingElements() {
+  if (__transientFloatingHidden) return;
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const candidates = document.querySelectorAll('*');
+
+  for (const el of candidates) {
+    if (!el || el.nodeType !== 1) continue;
+    if (el.dataset?.beribugOverlay) continue;
+
+    const computed = window.getComputedStyle(el);
+    if (computed.display === 'none' || computed.visibility === 'hidden') continue;
+    if (computed.position !== 'fixed' && computed.position !== 'sticky') continue;
+
+    const rect = el.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+    if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) continue;
+
+    if (isLikelyLayoutAnchor(el, rect, vw, vh)) continue;
+    if (!isLikelyFloatingNoise(el, rect, computed, vw, vh)) continue;
+
+    __hiddenFloatingElements.push({
+      el,
+      visibility: el.style.visibility,
+      pointerEvents: el.style.pointerEvents
+    });
+
+    el.style.setProperty('visibility', 'hidden', 'important');
+    el.style.setProperty('pointer-events', 'none', 'important');
+  }
+
+  __transientFloatingHidden = true;
+}
+
+function showTransientFloatingElements() {
+  if (!__transientFloatingHidden) return;
+
+  for (const entry of __hiddenFloatingElements) {
+    if (!entry || !entry.el) continue;
+    entry.el.style.visibility = entry.visibility || '';
+    entry.el.style.pointerEvents = entry.pointerEvents || '';
+  }
+
+  __hiddenFloatingElements.length = 0;
+  __transientFloatingHidden = false;
+}
 
 function startAreaSelectionOverlay() {
   if (__beribugShotOverlay) return;
@@ -625,6 +723,7 @@ function startScrollStopOverlay() {
 
   const box = document.createElement('div');
   __beribugScrollOverlay = box;
+  box.dataset.beribugOverlay = 'scroll-stop';
   box.style.position = 'fixed';
   box.style.right = '18px';
   box.style.bottom = '18px';
