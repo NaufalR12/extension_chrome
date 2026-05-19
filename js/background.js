@@ -8,10 +8,10 @@ let pendingRequests = new Map(); // requestId -> data (for advanced tracking)
 // Detect country on startup
 async function updateCountryCache() {
   try {
-    const res = await fetch('https://api.country.is/');
+    const res = await fetch("https://api.country.is/");
     const data = await res.json();
     if (data && data.country) {
-      const displayNames = new Intl.DisplayNames(['en'], { type: 'region' });
+      const displayNames = new Intl.DisplayNames(["en"], { type: "region" });
       cachedCountry = displayNames.of(data.country);
     }
   } catch (e) {
@@ -23,11 +23,17 @@ updateCountryCache();
 // Mask sensitive headers
 function maskHeaders(headers) {
   if (!headers) return headers;
-  const sensitive = ['authorization', 'cookie', 'set-cookie', 'x-api-key', 'api-key'];
+  const sensitive = [
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "api-key",
+  ];
   const masked = {};
   for (let key in headers) {
     if (sensitive.includes(key.toLowerCase())) {
-      masked[key] = '***** Auto-filtered';
+      masked[key] = "***** Auto-filtered";
     } else {
       masked[key] = headers[key];
     }
@@ -39,7 +45,7 @@ function maskHeaders(headers) {
 function flattenHeaders(headersArray) {
   const obj = {};
   if (!headersArray) return obj;
-  headersArray.forEach(h => {
+  headersArray.forEach((h) => {
     obj[h.name] = h.value;
   });
   return obj;
@@ -47,13 +53,13 @@ function flattenHeaders(headersArray) {
 
 // 🛠️ Helper: Determine Category (Fetch, JS, CSS, etc.)
 function determineResourceType(url, initiator, type) {
-  if (type === 'xmlhttprequest' || type === 'fetch') return 'Fetch/XHR';
-  if (type === 'script') return 'JS';
-  if (type === 'stylesheet') return 'CSS';
-  if (type === 'image') return 'Img';
-  if (type === 'font') return 'Font';
-  if (type === 'media') return 'Media';
-  if (type === 'main_frame' || type === 'sub_frame') return 'Doc';
+  if (type === "xmlhttprequest" || type === "fetch") return "Fetch/XHR";
+  if (type === "script") return "JS";
+  if (type === "stylesheet") return "CSS";
+  if (type === "image") return "Img";
+  if (type === "font") return "Font";
+  if (type === "media") return "Media";
+  if (type === "main_frame" || type === "sub_frame") return "Doc";
   return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
@@ -69,10 +75,10 @@ chrome.webRequest.onBeforeRequest.addListener(
       startTime: Date.now(),
       tabId: details.tabId,
       frameId: details.frameId,
-      initiator: details.initiator
+      initiator: details.initiator,
     });
   },
-  { urls: ["<all_urls>"] }
+  { urls: ["<all_urls>"] },
 );
 
 chrome.webRequest.onBeforeSendHeaders.addListener(
@@ -81,13 +87,14 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     const req = pendingRequests.get(details.requestId);
     if (!req) return;
     req.requestHeaders = maskHeaders(flattenHeaders(details.requestHeaders));
-    
+
     // Legacy headerCache for backward compat/other tabs
-    if (!headerCache.has(details.url)) headerCache.set(details.url, { request: {}, response: {} });
+    if (!headerCache.has(details.url))
+      headerCache.set(details.url, { request: {}, response: {} });
     headerCache.get(details.url).request = req.requestHeaders;
   },
   { urls: ["<all_urls>"] },
-  ["requestHeaders", "extraHeaders"]
+  ["requestHeaders", "extraHeaders"],
 );
 
 chrome.webRequest.onResponseStarted.addListener(
@@ -95,21 +102,32 @@ chrome.webRequest.onResponseStarted.addListener(
     if (!isRecording) return;
     const req = pendingRequests.get(details.requestId);
     if (!req) return;
-    
+
     req.status = details.statusCode;
     req.responseHeaders = maskHeaders(flattenHeaders(details.responseHeaders));
     req.fromCache = details.fromCache;
     req.ip = details.ip;
 
     // Extract size from Content-Length
-    const cl = details.responseHeaders.find(h => h.name.toLowerCase() === 'content-length');
+    const cl = details.responseHeaders.find(
+      (h) => h.name.toLowerCase() === "content-length",
+    );
     if (cl) req.size = parseInt(cl.value);
 
     // Legacy trace IDs
-    const traceHeaderNames = ['x-trace-id', 'x-request-id', 'traceparent', 'x-amzn-trace-id', 'cf-ray', 'x-b3-traceid'];
+    const traceHeaderNames = [
+      "x-trace-id",
+      "x-request-id",
+      "traceparent",
+      "x-amzn-trace-id",
+      "cf-ray",
+      "x-b3-traceid",
+    ];
     const rawHeaders = flattenHeaders(details.responseHeaders);
     req.traceIds = {};
-    traceHeaderNames.forEach(h => { if (rawHeaders[h]) req.traceIds[h] = rawHeaders[h]; });
+    traceHeaderNames.forEach((h) => {
+      if (rawHeaders[h]) req.traceIds[h] = rawHeaders[h];
+    });
 
     // Update Legacy HeaderCache
     if (headerCache.has(details.url)) {
@@ -120,7 +138,7 @@ chrome.webRequest.onResponseStarted.addListener(
     }
   },
   { urls: ["<all_urls>"] },
-  ["responseHeaders", "extraHeaders"]
+  ["responseHeaders", "extraHeaders"],
 );
 
 chrome.webRequest.onCompleted.addListener(
@@ -134,10 +152,12 @@ chrome.webRequest.onCompleted.addListener(
 
     const endTime = Date.now();
     const duration = endTime - req.startTime;
-    
+
     // Final check for size in onCompleted (some servers send it late)
     if (!req.size || req.size === 0) {
-      const cl = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-length');
+      const cl = details.responseHeaders?.find(
+        (h) => h.name.toLowerCase() === "content-length",
+      );
       if (cl) req.size = parseInt(cl.value);
     }
 
@@ -146,24 +166,25 @@ chrome.webRequest.onCompleted.addListener(
       url: req.url,
       status: req.status || details.statusCode || 200,
       type: determineResourceType(req.url, req.initiator, req.type),
-      size: req.fromCache ? -1 : (req.size || 0),
+      size: req.fromCache ? -1 : req.size || 0,
       duration: duration,
       requestHeaders: req.requestHeaders,
       responseHeaders: req.responseHeaders,
       traceIds: req.traceIds,
-      isStatic: !['xmlhttprequest', 'fetch'].includes(req.type),
+      isStatic: !["xmlhttprequest", "fetch"].includes(req.type),
       fromCache: req.fromCache,
-      frameContext: req.frameId === 0 ? "Main Frame" : `Sub Frame (${req.frameId})`,
-      startTimeAbs: req.startTime
+      frameContext:
+        req.frameId === 0 ? "Main Frame" : `Sub Frame (${req.frameId})`,
+      startTimeAbs: req.startTime,
     };
 
-    appendLog('NETWORK', logEntry);
+    appendLog("NETWORK", logEntry);
 
     // 🧹 Memory Cleanup
     pendingRequests.delete(details.requestId);
   },
   { urls: ["<all_urls>"] },
-  ["responseHeaders", "extraHeaders"]
+  ["responseHeaders", "extraHeaders"],
 );
 
 chrome.webRequest.onErrorOccurred.addListener(
@@ -174,25 +195,25 @@ chrome.webRequest.onErrorOccurred.addListener(
     }
     const req = pendingRequests.get(details.requestId);
     if (req) {
-      appendLog('NETWORK', {
+      appendLog("NETWORK", {
         method: req.method,
         url: req.url,
         status: 0,
         type: determineResourceType(req.url, req.initiator, req.type),
         message: details.error,
         startTimeAbs: req.startTime,
-        duration: Date.now() - req.startTime
+        duration: Date.now() - req.startTime,
       });
     }
     pendingRequests.delete(details.requestId);
   },
-  { urls: ["<all_urls>"] }
+  { urls: ["<all_urls>"] },
 );
 
 // Initialize log storage
 async function resetLogs() {
-  await chrome.storage.local.set({ 
-    sessionLogs: { console: [], network: [], actions: [], backend: [] } 
+  await chrome.storage.local.set({
+    sessionLogs: { console: [], network: [], actions: [], backend: [] },
   });
 }
 
@@ -230,81 +251,102 @@ async function processQueue() {
 }
 
 async function performAppendLog(type, payload) {
-  const data = await chrome.storage.local.get(['sessionLogs']);
-  const logs = data.sessionLogs || { console: [], network: [], actions: [], backend: [] };
-  
+  const data = await chrome.storage.local.get(["sessionLogs"]);
+  const logs = data.sessionLogs || {
+    console: [],
+    network: [],
+    actions: [],
+    backend: [],
+  };
+
   if (recordingStartTime) {
     const now = Date.now();
-    const elapsedMs = payload.startTimeAbs ? (payload.startTimeAbs - recordingStartTime) : (now - recordingStartTime);
+    const elapsedMs = payload.startTimeAbs
+      ? payload.startTimeAbs - recordingStartTime
+      : now - recordingStartTime;
     payload.relativeMs = Math.max(0, elapsedMs); // Ensure not negative
 
     const elapsedSecs = Math.floor(payload.relativeMs / 1000);
-    const m = Math.floor(elapsedSecs / 60).toString().padStart(2, '0');
-    const s = (elapsedSecs % 60).toString().padStart(2, '0');
+    const m = Math.floor(elapsedSecs / 60)
+      .toString()
+      .padStart(2, "0");
+    const s = (elapsedSecs % 60).toString().padStart(2, "0");
     payload.time = `[${m}:${s}] `;
   } else {
     // If recording started but startTime not yet set (during picker)
     payload.relativeMs = 0;
     payload.time = `[00:00] `;
   }
-  
-  if (type === 'CONSOLE') logs.console.push(payload);
-  else if (type === 'ACTIONS') {
+
+  if (type === "CONSOLE") logs.console.push(payload);
+  else if (type === "ACTIONS") {
     logs.actions.push(payload);
-    
+
     // 🧭 URL TIMELINE TRACKING
-    if (payload.event && payload.event.includes('Navigated')) {
+    if (payload.event && payload.event.includes("Navigated")) {
       const timeMs = payload.relativeMs || 0;
       if (!logs.info) logs.info = {};
       if (!logs.info.urlTimeline) logs.info.urlTimeline = [];
-      
+
       const lastEntry = logs.info.urlTimeline[logs.info.urlTimeline.length - 1];
       const currentUrl = payload.element;
-      
-      // Allow if it's the first entry, or the URL is different, 
+
+      // Allow if it's the first entry, or the URL is different,
       // or it's been more than 500ms (to catch refreshes/redirects)
-      if (!lastEntry || lastEntry.url !== currentUrl || (timeMs - (lastEntry.timeMs || 0) > 500)) {
-        logs.info.urlTimeline.push({ 
-          time: Math.floor(timeMs / 1000), 
-          timeMs: timeMs,                 
-          url: currentUrl 
+      if (
+        !lastEntry ||
+        lastEntry.url !== currentUrl ||
+        timeMs - (lastEntry.timeMs || 0) > 500
+      ) {
+        logs.info.urlTimeline.push({
+          time: Math.floor(timeMs / 1000),
+          timeMs: timeMs,
+          url: currentUrl,
         });
-        
+
         // Update current URL in info
         logs.info.url = currentUrl;
       }
     }
-  }
-  else if (type === 'BACKEND') logs.backend.push(payload);
-  else if (type === 'NETWORK') {
+  } else if (type === "BACKEND") logs.backend.push(payload);
+  else if (type === "NETWORK") {
     if (payload.isMonkeyPatched) {
-      const existing = logs.network.find(n => 
-        n.url === payload.url && 
-        Math.abs(n.relativeMs - payload.relativeMs) < 2000
+      const existing = logs.network.find(
+        (n) =>
+          n.url === payload.url &&
+          Math.abs(n.relativeMs - payload.relativeMs) < 2000,
       );
       if (existing) {
         existing.requestBody = payload.requestBody;
         existing.responseBody = payload.responseBody;
-        if (payload.requestHeaders) existing.requestHeaders = {...existing.requestHeaders, ...payload.requestHeaders};
+        if (payload.requestHeaders)
+          existing.requestHeaders = {
+            ...existing.requestHeaders,
+            ...payload.requestHeaders,
+          };
         await chrome.storage.local.set({ sessionLogs: logs });
         return;
       }
     }
     logs.network.push(payload);
     const status = payload.status;
-    if (status && typeof status === 'number' && status >= 400) {
-      const traceInfo = payload.traceIds ? Object.entries(payload.traceIds).map(([k,v]) => `${k}: ${v}`).join(' | ') : '';
+    if (status && typeof status === "number" && status >= 400) {
+      const traceInfo = payload.traceIds
+        ? Object.entries(payload.traceIds)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(" | ")
+        : "";
       logs.backend.push({
         time: payload.time,
-        type: 'API Failure',
+        type: "API Failure",
         message: `${payload.method} ${payload.url} → ${status}`,
-        stack: traceInfo ? `Trace IDs:\n${traceInfo}` : '',
+        stack: traceInfo ? `Trace IDs:\n${traceInfo}` : "",
         source: payload.url,
-        relativeMs: payload.relativeMs
+        relativeMs: payload.relativeMs,
       });
     }
   }
-  
+
   if (logs.console.length > 500) logs.console.shift();
   if (logs.network.length > 500) logs.network.shift();
   if (logs.actions.length > 500) logs.actions.shift();
@@ -316,16 +358,16 @@ async function performAppendLog(type, payload) {
 // Ensure offscreen document exists
 async function setupOffscreenDocument(path) {
   const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: ['OFFSCREEN_DOCUMENT'],
-    documentUrls: [chrome.runtime.getURL(path)]
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [chrome.runtime.getURL(path)],
   });
 
   if (existingContexts.length > 0) return;
 
   await chrome.offscreen.createDocument({
     url: path,
-    reasons: ['USER_MEDIA'],
-    justification: 'Recording screen for T.R.A.C.E report'
+    reasons: ["USER_MEDIA"],
+    justification: "Recording screen for T.R.A.C.E report",
   });
 }
 
@@ -345,41 +387,45 @@ const CAPTURE_MIN_INTERVAL_MS = 1100; // be conservative to avoid quota
 const __lastCaptureAtByWindowId = new Map();
 
 function openScreenshotError(message) {
-  const msg = encodeURIComponent(String(message || 'Screenshot gagal'));
-  chrome.tabs.create({ url: chrome.runtime.getURL(`html/screenshot.html#error=${msg}`) });
+  const msg = encodeURIComponent(String(message || "Screenshot gagal"));
+  chrome.tabs.create({
+    url: chrome.runtime.getURL(`html/screenshot.html#error=${msg}`),
+  });
 }
 
 function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function isInjectableUrl(url) {
   if (!url) return false;
   return !(
-    url.startsWith('chrome://') ||
-    url.startsWith('chrome-extension://') ||
-    url.startsWith('edge://') ||
-    url.startsWith('about:')
+    url.startsWith("chrome://") ||
+    url.startsWith("chrome-extension://") ||
+    url.startsWith("edge://") ||
+    url.startsWith("about:")
   );
 }
 
 async function ensureContentScript(tabId) {
   const tab = await chrome.tabs.get(tabId);
   if (!isInjectableUrl(tab.url)) {
-    throw new Error('Halaman ini tidak mengizinkan screenshot dari extension (chrome://, edge://, atau halaman extension).');
+    throw new Error(
+      "Halaman ini tidak mengizinkan screenshot dari extension (chrome://, edge://, atau halaman extension).",
+    );
   }
 
   try {
-    await chrome.tabs.sendMessage(tabId, { action: 'BERIBUG_PING' });
+    await chrome.tabs.sendMessage(tabId, { action: "BERIBUG_PING" });
     return;
   } catch (_) {
     // Likely after extension reload or tab not refreshed.
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['js/content.js']
+      files: ["js/content.js"],
     });
     await sleep(50);
-    await chrome.tabs.sendMessage(tabId, { action: 'BERIBUG_PING' });
+    await chrome.tabs.sendMessage(tabId, { action: "BERIBUG_PING" });
   }
 }
 
@@ -408,13 +454,18 @@ async function captureVisibleTabForTab(tabId) {
   while (true) {
     await throttleCapture(windowId);
     try {
-      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+        format: "png",
+      });
       __lastCaptureAtByWindowId.set(windowId, Date.now());
       return dataUrl;
     } catch (e) {
-      const msg = (e && e.message) ? e.message : String(e);
+      const msg = e && e.message ? e.message : String(e);
       // Typical error: "This request exceeds the MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND quota."
-      if (/MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i.test(msg) && attempt < 5) {
+      if (
+        /MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND/i.test(msg) &&
+        attempt < 5
+      ) {
         attempt += 1;
         await sleep(backoff);
         backoff = Math.min(backoff * 1.6, 4000);
@@ -433,15 +484,16 @@ async function dataUrlToBlob(dataUrl) {
 async function blobToDataUrl(blob) {
   const arrayBuffer = await blob.arrayBuffer();
   const bytes = new Uint8Array(arrayBuffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++)
+    binary += String.fromCharCode(bytes[i]);
   const base64 = btoa(binary);
   return `data:${blob.type};base64,${base64}`;
 }
 
 async function cropDataUrl(dataUrl, cropPx) {
-  if (typeof OffscreenCanvas === 'undefined') {
-    throw new Error('OffscreenCanvas not available for cropping');
+  if (typeof OffscreenCanvas === "undefined") {
+    throw new Error("OffscreenCanvas not available for cropping");
   }
   const blob = await dataUrlToBlob(dataUrl);
   const bmp = await createImageBitmap(blob);
@@ -452,39 +504,44 @@ async function cropDataUrl(dataUrl, cropPx) {
   const h = Math.max(1, Math.min(cropPx.height, bmp.height - y));
 
   const canvas = new OffscreenCanvas(w, h);
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(
-    bmp,
-    x,
-    y,
-    w,
-    h,
-    0,
-    0,
-    w,
-    h
-  );
-  const outBlob = await canvas.convertToBlob({ type: 'image/png' });
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bmp, x, y, w, h, 0, 0, w, h);
+  const outBlob = await canvas.convertToBlob({ type: "image/png" });
   return await blobToDataUrl(outBlob);
 }
 
-async function stitchVerticalDataUrls(dataUrls, segmentHeightsPx, totalWidthPx, totalHeightPx) {
-  if (typeof OffscreenCanvas === 'undefined') {
-    throw new Error('OffscreenCanvas not available for stitching');
+async function stitchVerticalDataUrls(
+  dataUrls,
+  segmentHeightsPx,
+  totalWidthPx,
+  totalHeightPx,
+) {
+  if (typeof OffscreenCanvas === "undefined") {
+    throw new Error("OffscreenCanvas not available for stitching");
   }
   const canvas = new OffscreenCanvas(totalWidthPx, totalHeightPx);
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext("2d");
 
   let offsetY = 0;
   for (let i = 0; i < dataUrls.length; i++) {
     const blob = await dataUrlToBlob(dataUrls[i]);
     const bmp = await createImageBitmap(blob);
     const drawH = segmentHeightsPx[i];
-    ctx.drawImage(bmp, 0, 0, totalWidthPx, drawH, 0, offsetY, totalWidthPx, drawH);
+    ctx.drawImage(
+      bmp,
+      0,
+      0,
+      totalWidthPx,
+      drawH,
+      0,
+      offsetY,
+      totalWidthPx,
+      drawH,
+    );
     offsetY += drawH;
   }
 
-  const outBlob = await canvas.convertToBlob({ type: 'image/png' });
+  const outBlob = await canvas.convertToBlob({ type: "image/png" });
   return await blobToDataUrl(outBlob);
 }
 
@@ -493,69 +550,79 @@ async function openScreenshotPreview(meta, imageDataUrl) {
     pendingScreenshot: {
       meta,
       imageDataUrl,
-      createdAt: Date.now()
-    }
+      createdAt: Date.now(),
+    },
   });
-  await chrome.tabs.create({ url: chrome.runtime.getURL('html/screenshot.html') });
+  await chrome.tabs.create({
+    url: chrome.runtime.getURL("html/screenshot.html"),
+  });
 }
 
 // Simple viewport capture - take screenshot of visible area only, no scrolling
 async function captureViewport(tabId) {
   await ensureTabActive(tabId);
   await ensureContentScript(tabId);
-  
+
   // Get viewport metrics for debugging
-  const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
+  const metrics = await chrome.tabs.sendMessage(tabId, {
+    action: "SCREENSHOT_GET_METRICS",
+  });
   const dpr = metrics?.devicePixelRatio || 1;
   const expectedWidthPx = (metrics?.viewportWidth || 0) * dpr;
   const expectedHeightPx = (metrics?.viewportHeight || 0) * dpr;
-  
-  console.log(`[captureViewport] Expected: ${expectedWidthPx}x${expectedHeightPx}px (DPR: ${dpr})`);
-  
+
+  console.log(
+    `[captureViewport] Expected: ${expectedWidthPx}x${expectedHeightPx}px (DPR: ${dpr})`,
+  );
+
   const dataUrl = await captureVisibleTabForTab(tabId);
-  
+
   // Validate captured image dimensions
   try {
     const blob = await dataUrlToBlob(dataUrl);
     const bitmap = await createImageBitmap(blob);
     console.log(`[captureViewport] Actual: ${bitmap.width}x${bitmap.height}px`);
-    
+
     if (bitmap.height < expectedHeightPx * 0.8) {
-      console.warn(`[captureViewport] Viewport may be cropped: ${bitmap.height}px vs ${expectedHeightPx}px expected`);
+      console.warn(
+        `[captureViewport] Viewport may be cropped: ${bitmap.height}px vs ${expectedHeightPx}px expected`,
+      );
     }
   } catch (e) {
     console.log(`[captureViewport] Could not validate: ${e?.message}`);
   }
-  
+
   const meta = {
-    type: 'screenshot',
-    mode: 'full',
+    type: "screenshot",
+    mode: "full",
     tabId,
-    capturedAt: new Date().toISOString()
+    capturedAt: new Date().toISOString(),
   };
   await openScreenshotPreview(meta, dataUrl);
 }
 
 async function getLiveScreenshotMetrics(tabId) {
-  const metrics = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_GET_METRICS' });
+  const metrics = await chrome.tabs.sendMessage(tabId, {
+    action: "SCREENSHOT_GET_METRICS",
+  });
   if (!metrics || !metrics.viewportHeight) {
-    throw new Error('Tidak bisa mengambil ukuran halaman');
+    throw new Error("Tidak bisa mengambil ukuran halaman");
   }
   return metrics;
 }
 
 async function waitForScrollStable(tabId, expectedY = null, options = {}) {
   const res = await chrome.tabs.sendMessage(tabId, {
-    action: 'SCREENSHOT_WAIT_STABLE',
+    action: "SCREENSHOT_WAIT_STABLE",
     expectedY,
     tolerance: options.tolerance ?? 2,
     stableFrames: options.stableFrames ?? 3,
     settleFrames: options.settleFrames ?? 2,
-    maxWaitMs: options.maxWaitMs ?? 1800
+    maxWaitMs: options.maxWaitMs ?? 1800,
   });
 
   if (!res || !res.ok || !res.metrics) {
-    throw new Error(res?.error || 'Gagal menunggu scroll stabil');
+    throw new Error(res?.error || "Gagal menunggu scroll stabil");
   }
 
   return res.metrics;
@@ -565,37 +632,50 @@ async function ensureTopAndCaptureFirstFrame(tabId, interactiveUi) {
   let topMetrics = null;
 
   for (let attempt = 1; attempt <= 6; attempt++) {
-    await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: 0 });
+    await chrome.tabs.sendMessage(tabId, {
+      action: "SCREENSHOT_SCROLL_TO",
+      y: 0,
+    });
     topMetrics = await waitForScrollStable(tabId, 0, {
       tolerance: 2,
       stableFrames: 4,
       settleFrames: 3,
-      maxWaitMs: 2200
+      maxWaitMs: 2200,
     });
 
-    if (Math.abs((topMetrics.scrollY || 0)) <= 2) {
+    if (Math.abs(topMetrics.scrollY || 0) <= 2) {
       break;
     }
 
     if (attempt === 6) {
-      throw new Error('Tidak bisa memulai capture dari paling atas halaman secara stabil.');
+      throw new Error(
+        "Tidak bisa memulai capture dari paling atas halaman secara stabil.",
+      );
     }
   }
 
   if (interactiveUi) {
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' }); } catch (_) {}
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: "SCREENSHOT_HIDE_SCROLL_UI",
+      });
+    } catch (_) {}
   }
   await sleep(40);
   const firstDataUrl = await captureVisibleTabForTab(tabId);
   if (interactiveUi) {
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_SCROLL_UI' }); } catch (_) {}
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: "SCREENSHOT_SHOW_SCROLL_UI",
+      });
+    } catch (_) {}
   }
 
   return {
     dataUrl: firstDataUrl,
     scrollY: topMetrics.scrollY || 0,
     viewportHeight: topMetrics.viewportHeight,
-    scrollHeight: topMetrics.scrollHeight
+    scrollHeight: topMetrics.scrollHeight,
   };
 }
 
@@ -603,7 +683,15 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function rgbDiff(dataA, dataB, width, height, rowOffsetB, sampleStepX = 6, sampleStepY = 3) {
+function rgbDiff(
+  dataA,
+  dataB,
+  width,
+  height,
+  rowOffsetB,
+  sampleStepX = 6,
+  sampleStepY = 3,
+) {
   let score = 0;
   let count = 0;
   const stride = width * 4;
@@ -612,8 +700,8 @@ function rgbDiff(dataA, dataB, width, height, rowOffsetB, sampleStepX = 6, sampl
     const rowA = y * stride;
     const rowB = (rowOffsetB + y) * stride;
     for (let x = 0; x < width; x += sampleStepX) {
-      const idxA = rowA + (x * 4);
-      const idxB = rowB + (x * 4);
+      const idxA = rowA + x * 4;
+      const idxB = rowB + x * 4;
 
       score += Math.abs(dataA[idxA] - dataB[idxB]);
       score += Math.abs(dataA[idxA + 1] - dataB[idxB + 1]);
@@ -622,7 +710,7 @@ function rgbDiff(dataA, dataB, width, height, rowOffsetB, sampleStepX = 6, sampl
     }
   }
 
-  return count ? (score / count) : Number.POSITIVE_INFINITY;
+  return count ? score / count : Number.POSITIVE_INFINITY;
 }
 
 async function findBestVisualOverlapPx(prevBmp, currBmp, predictedOverlapPx) {
@@ -631,49 +719,85 @@ async function findBestVisualOverlapPx(prevBmp, currBmp, predictedOverlapPx) {
   const currH = currBmp.height;
 
   if (width < 40 || prevH < 80 || currH < 80) {
-    return clamp(predictedOverlapPx || Math.round(currH * 0.2), 1, Math.max(1, currH - 1));
+    return clamp(
+      predictedOverlapPx || Math.round(currH * 0.2),
+      1,
+      Math.max(1, currH - 1),
+    );
   }
 
   const bandH = clamp(Math.round(Math.min(prevH, currH) * 0.12), 72, 220);
-  const minOverlap = clamp(Math.round(currH * 0.08), 20, Math.max(20, currH - 1));
-  const maxOverlap = clamp(Math.round(currH * 0.6), minOverlap + 1, Math.max(minOverlap + 1, currH - 1));
+  const minOverlap = clamp(
+    Math.round(currH * 0.08),
+    20,
+    Math.max(20, currH - 1),
+  );
+  const maxOverlap = clamp(
+    Math.round(currH * 0.6),
+    minOverlap + 1,
+    Math.max(minOverlap + 1, currH - 1),
+  );
   const predicted = clamp(
-    typeof predictedOverlapPx === 'number' ? predictedOverlapPx : Math.round(currH * 0.2),
+    typeof predictedOverlapPx === "number"
+      ? predictedOverlapPx
+      : Math.round(currH * 0.2),
     minOverlap,
-    maxOverlap
+    maxOverlap,
   );
 
   const searchRadius = clamp(Math.round(currH * 0.22), 110, 360);
   const candidateMin = clamp(predicted - searchRadius, minOverlap, maxOverlap);
-  const candidateMax = clamp(predicted + searchRadius, candidateMin, maxOverlap);
+  const candidateMax = clamp(
+    predicted + searchRadius,
+    candidateMin,
+    maxOverlap,
+  );
 
   if (candidateMax - candidateMin < 3 || candidateMin < bandH) {
     return clamp(predicted, bandH, maxOverlap);
   }
 
   const prevCanvas = new OffscreenCanvas(width, prevH);
-  const prevCtx = prevCanvas.getContext('2d', { willReadFrequently: true });
+  const prevCtx = prevCanvas.getContext("2d", { willReadFrequently: true });
   prevCtx.drawImage(prevBmp, 0, 0, width, prevH, 0, 0, width, prevH);
-  const prevBandData = prevCtx.getImageData(0, prevH - bandH, width, bandH).data;
+  const prevBandData = prevCtx.getImageData(
+    0,
+    prevH - bandH,
+    width,
+    bandH,
+  ).data;
 
   const currCanvas = new OffscreenCanvas(width, currH);
-  const currCtx = currCanvas.getContext('2d', { willReadFrequently: true });
+  const currCtx = currCanvas.getContext("2d", { willReadFrequently: true });
   currCtx.drawImage(currBmp, 0, 0, width, currH, 0, 0, width, currH);
 
   const regionTop = candidateMin - bandH;
-  const regionHeight = (candidateMax - candidateMin) + bandH;
-  const currRegion = currCtx.getImageData(0, regionTop, width, regionHeight).data;
+  const regionHeight = candidateMax - candidateMin + bandH;
+  const currRegion = currCtx.getImageData(
+    0,
+    regionTop,
+    width,
+    regionHeight,
+  ).data;
 
   let bestOverlap = predicted;
   let bestScore = Number.POSITIVE_INFINITY;
 
   for (let overlap = candidateMin; overlap <= candidateMax; overlap += 2) {
     const bandStartRow = overlap - bandH - regionTop;
-    if (bandStartRow < 0 || (bandStartRow + bandH) > regionHeight) {
+    if (bandStartRow < 0 || bandStartRow + bandH > regionHeight) {
       continue;
     }
 
-    const score = rgbDiff(prevBandData, currRegion, width, bandH, bandStartRow, 7, 3);
+    const score = rgbDiff(
+      prevBandData,
+      currRegion,
+      width,
+      bandH,
+      bandStartRow,
+      7,
+      3,
+    );
     if (score < bestScore) {
       bestScore = score;
       bestOverlap = overlap;
@@ -685,7 +809,7 @@ async function findBestVisualOverlapPx(prevBmp, currBmp, predictedOverlapPx) {
 
 async function stitchByActualScrollPositions(frames) {
   if (!frames || !frames.length) {
-    throw new Error('Tidak ada frame untuk stitching');
+    throw new Error("Tidak ada frame untuk stitching");
   }
 
   const bitmaps = [];
@@ -697,7 +821,8 @@ async function stitchByActualScrollPositions(frames) {
 
   const firstFrame = frames[0];
   const firstBmp = bitmaps[0];
-  const lockedScalePxPerCss = firstBmp.height / Math.max(1, firstFrame.viewportHeight || 1);
+  const lockedScalePxPerCss =
+    firstBmp.height / Math.max(1, firstFrame.viewportHeight || 1);
 
   const processedUrls = [firstFrame.dataUrl];
   const processedHeightsPx = [firstBmp.height];
@@ -710,15 +835,27 @@ async function stitchByActualScrollPositions(frames) {
     const prevBmp = bitmaps[i - 1];
     const currBmp = bitmaps[i];
 
-    const predictedOverlapCss = Math.max(0, (prev.scrollY + prev.viewportHeight) - curr.scrollY);
-    const predictedOverlapPx = Math.round(predictedOverlapCss * lockedScalePxPerCss);
-    const bestOverlapPx = await findBestVisualOverlapPx(prevBmp, currBmp, predictedOverlapPx);
+    const predictedOverlapCss = Math.max(
+      0,
+      prev.scrollY + prev.viewportHeight - curr.scrollY,
+    );
+    const predictedOverlapPx = Math.round(
+      predictedOverlapCss * lockedScalePxPerCss,
+    );
+    const bestOverlapPx = await findBestVisualOverlapPx(
+      prevBmp,
+      currBmp,
+      predictedOverlapPx,
+    );
 
-    const maxVisibleCss = Math.max(0, Math.min(curr.viewportHeight, curr.scrollHeight - curr.scrollY));
+    const maxVisibleCss = Math.max(
+      0,
+      Math.min(curr.viewportHeight, curr.scrollHeight - curr.scrollY),
+    );
     const maxVisiblePx = clamp(
       Math.round(maxVisibleCss * lockedScalePxPerCss),
       1,
-      currBmp.height
+      currBmp.height,
     );
 
     const cropTopPx = clamp(bestOverlapPx, 0, currBmp.height - 1);
@@ -729,7 +866,7 @@ async function stitchByActualScrollPositions(frames) {
       x: 0,
       y: cropTopPx,
       width: currBmp.width,
-      height: cropHeightPx
+      height: cropHeightPx,
     });
 
     processedUrls.push(outUrl);
@@ -738,14 +875,21 @@ async function stitchByActualScrollPositions(frames) {
   }
 
   if (!processedUrls.length || !totalHeightPx) {
-    throw new Error('Gagal menyiapkan frame untuk stitching');
+    throw new Error("Gagal menyiapkan frame untuk stitching");
   }
 
   if (totalHeightPx > 30000 || widthPx > 30000) {
-    throw new Error('Hasil terlalu panjang/besar untuk di-stitch. Coba area selection atau bagian tertentu.');
+    throw new Error(
+      "Hasil terlalu panjang/besar untuk di-stitch. Coba area selection atau bagian tertentu.",
+    );
   }
 
-  return await stitchVerticalDataUrls(processedUrls, processedHeightsPx, widthPx, totalHeightPx);
+  return await stitchVerticalDataUrls(
+    processedUrls,
+    processedHeightsPx,
+    widthPx,
+    totalHeightPx,
+  );
 }
 
 async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
@@ -759,21 +903,36 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
   } catch (_) {}
 
   if (interactiveUi) {
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_START' }); } catch (_) {}
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: "SCREENSHOT_SCROLL_UI_START",
+      });
+    } catch (_) {}
   }
 
   const frames = [];
 
   try {
-    try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_FLOATING' }); } catch (_) {}
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: "SCREENSHOT_HIDE_FLOATING",
+      });
+    } catch (_) {}
 
-    const firstFrame = await ensureTopAndCaptureFirstFrame(tabId, interactiveUi);
+    const firstFrame = await ensureTopAndCaptureFirstFrame(
+      tabId,
+      interactiveUi,
+    );
     frames.push(firstFrame);
 
     for (let i = 0; i < 400; i++) {
       if (interactiveUi) {
-        if (!activeScreenshotFlow || activeScreenshotFlow.tabId !== tabId || activeScreenshotFlow.scrollCancel) {
-          throw new Error('Scroll screenshot dibatalkan.');
+        if (
+          !activeScreenshotFlow ||
+          activeScreenshotFlow.tabId !== tabId ||
+          activeScreenshotFlow.scrollCancel
+        ) {
+          throw new Error("Scroll screenshot dibatalkan.");
         }
 
         if (activeScreenshotFlow.scrollStop) {
@@ -795,7 +954,10 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
       const maxTopY = Math.max(0, liveScrollHeight - viewportH);
       const targetY = Math.min(previous.scrollY + step, maxTopY);
 
-      const scrollResult = await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: targetY });
+      const scrollResult = await chrome.tabs.sendMessage(tabId, {
+        action: "SCREENSHOT_SCROLL_TO",
+        y: targetY,
+      });
       if (!scrollResult || !scrollResult.ok) {
         break;
       }
@@ -804,7 +966,7 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
         tolerance: 2,
         stableFrames: 3,
         settleFrames: 2,
-        maxWaitMs: 1800
+        maxWaitMs: 1800,
       });
 
       const currentY = stable.scrollY || scrollResult.actualY || targetY;
@@ -812,7 +974,10 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
       const currentScrollHeight = stable.scrollHeight || liveScrollHeight;
       const currentCapturedBottom = currentY + currentViewportH;
 
-      if (currentY <= previous.scrollY + 1 && currentCapturedBottom <= capturedBottom + 1) {
+      if (
+        currentY <= previous.scrollY + 1 &&
+        currentCapturedBottom <= capturedBottom + 1
+      ) {
         if (currentCapturedBottom >= currentScrollHeight - 1) {
           break;
         }
@@ -820,19 +985,27 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
       }
 
       if (interactiveUi) {
-        try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' }); } catch (_) {}
+        try {
+          await chrome.tabs.sendMessage(tabId, {
+            action: "SCREENSHOT_HIDE_SCROLL_UI",
+          });
+        } catch (_) {}
       }
       await sleep(30);
       const dataUrl = await captureVisibleTabForTab(tabId);
       if (interactiveUi) {
-        try { await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_SCROLL_UI' }); } catch (_) {}
+        try {
+          await chrome.tabs.sendMessage(tabId, {
+            action: "SCREENSHOT_SHOW_SCROLL_UI",
+          });
+        } catch (_) {}
       }
 
       frames.push({
         dataUrl,
         scrollY: currentY,
         viewportHeight: currentViewportH,
-        scrollHeight: currentScrollHeight
+        scrollHeight: currentScrollHeight,
       });
 
       if (currentCapturedBottom >= currentScrollHeight - 1) {
@@ -841,19 +1014,28 @@ async function captureScrollWithActualStitching(tabId, interactiveUi = false) {
     }
 
     if (!frames.length) {
-      throw new Error('Tidak ada gambar yang berhasil di-capture.');
+      throw new Error("Tidak ada gambar yang berhasil di-capture.");
     }
 
     return await stitchByActualScrollPositions(frames);
   } finally {
     try {
       if (interactiveUi) {
-        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_HIDE_SCROLL_UI' });
+        await chrome.tabs.sendMessage(tabId, {
+          action: "SCREENSHOT_HIDE_SCROLL_UI",
+        });
       }
-      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SHOW_FLOATING' });
-      await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_TO', y: originalScrollY });
+      await chrome.tabs.sendMessage(tabId, {
+        action: "SCREENSHOT_SHOW_FLOATING",
+      });
+      await chrome.tabs.sendMessage(tabId, {
+        action: "SCREENSHOT_SCROLL_TO",
+        y: originalScrollY,
+      });
       if (interactiveUi) {
-        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_SCROLL_UI_END' });
+        await chrome.tabs.sendMessage(tabId, {
+          action: "SCREENSHOT_SCROLL_UI_END",
+        });
       }
     } catch (_) {}
   }
@@ -863,10 +1045,10 @@ async function captureFull(tabId) {
   const stitched = await captureScrollWithActualStitching(tabId, false);
 
   const meta = {
-    type: 'screenshot',
-    mode: 'scroll',
+    type: "screenshot",
+    mode: "scroll",
     tabId,
-    capturedAt: new Date().toISOString()
+    capturedAt: new Date().toISOString(),
   };
   await openScreenshotPreview(meta, stitched);
 }
@@ -875,10 +1057,10 @@ async function captureScrollInteractive(tabId) {
   const stitched = await captureScrollWithActualStitching(tabId, true);
 
   const meta = {
-    type: 'screenshot',
-    mode: 'scroll',
+    type: "screenshot",
+    mode: "scroll",
     tabId,
-    capturedAt: new Date().toISOString()
+    capturedAt: new Date().toISOString(),
   };
   await openScreenshotPreview(meta, stitched);
 }
@@ -886,8 +1068,8 @@ async function captureScrollInteractive(tabId) {
 // Unified message listener
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   // 0. Save environment snapshot
-  if (request.action === 'SAVE_ENVIRONMENT') {
-    chrome.storage.local.get(['sessionLogs'], (data) => {
+  if (request.action === "SAVE_ENVIRONMENT") {
+    chrome.storage.local.get(["sessionLogs"], (data) => {
       const logs = data.sessionLogs || {};
       if (!logs.info) logs.info = {};
       logs.info.environment = request.payload;
@@ -897,23 +1079,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   // Retry Area Screenshot
-  if (request.action === 'RETRY_SCREENSHOT_AREA') {
+  if (request.action === "RETRY_SCREENSHOT_AREA") {
     (async () => {
       try {
         const tabId = request.tabId;
         if (!tabId) {
-          sendResponse({ ok: false, error: 'Missing tabId for retry' });
+          sendResponse({ ok: false, error: "Missing tabId for retry" });
           return;
         }
 
-        activeScreenshotFlow = { mode: 'area', tabId, startedAt: Date.now() };
+        activeScreenshotFlow = { mode: "area", tabId, startedAt: Date.now() };
 
         await ensureTabActive(tabId);
         await ensureContentScript(tabId);
-        await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_START_AREA_SELECT' });
+        await chrome.tabs.sendMessage(tabId, {
+          action: "SCREENSHOT_START_AREA_SELECT",
+        });
         sendResponse({ ok: true });
       } catch (e) {
-        console.error('RETRY_SCREENSHOT_AREA failed:', e);
+        console.error("RETRY_SCREENSHOT_AREA failed:", e);
         sendResponse({ ok: false, error: e.message });
       }
     })();
@@ -921,140 +1105,162 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   // 1. Session Logging
-  if (request.action === 'LOG_CAPTURED') {
+  if (request.action === "LOG_CAPTURED") {
     if (isRecording) {
       appendLog(request.type, request.payload);
     }
-  } 
-  
+  }
+
   // 2. Recording Controls
-  else if (request.action === 'START_RECORDING') {
+  else if (request.action === "START_RECORDING") {
     resetLogs().then(async () => {
       // FIX ISSUE 1: Always clear old videos from IndexedDB and local storage on new recording!
       await clearVideoFromDB();
-      await chrome.storage.local.remove(['pendingVideo', 'pendingReport']);
+      await chrome.storage.local.remove(["pendingVideo", "pendingReport"]);
       pendingVideoBase64 = null;
-      
+
       isRecording = true;
       recordingStartTime = null; // Don't set yet, wait for media stream
       headerCache.clear();
 
-      chrome.storage.local.get(['sessionLogs'], (data) => {
+      chrome.storage.local.get(["sessionLogs"], (data) => {
         const logs = data.sessionLogs || {};
         if (!logs.info) logs.info = {};
-        
+
         // Preserve any info already recorded (like early navigations)
-        logs.info.url = logs.info.url || request.payloadUrl || 'N/A';
-        logs.info.location = cachedCountry || 'Unknown';
+        logs.info.url = logs.info.url || request.payloadUrl || "N/A";
+        logs.info.location = cachedCountry || "Unknown";
         logs.info.timestamp = new Date().toLocaleString();
-        
+
         if (!logs.info.urlTimeline || logs.info.urlTimeline.length === 0) {
           logs.info.urlTimeline = [{ time: 0, timeMs: 0, url: logs.info.url }];
         }
-        
+
         chrome.storage.local.set({ sessionLogs: logs });
       });
-      
-      setupOffscreenDocument('html/offscreen.html').then(() => {
-        chrome.runtime.sendMessage({ target: 'offscreen', action: 'startRecording' }, (response) => {
-          if (response && response.status === 'started') {
-            recordingStartTime = Date.now(); // Set actual start time now
-            
-            // Show widget on the active tab
-            chrome.tabs.query({active: true, lastFocusedWindow: true}, function(tabs) {
-              const targetTab = tabs[0];
-              if (targetTab) {
-                chrome.tabs.sendMessage(targetTab.id, { 
-                  action: 'SHOW_WIDGET', 
-                  startTime: 0, 
-                  isPaused: isPaused 
-                }).catch(() => {
-                  chrome.scripting.executeScript({
-                    target: { tabId: targetTab.id },
-                    files: ['js/content.js']
-                  }, () => {
-                    if (!chrome.runtime.lastError) {
-                      chrome.tabs.sendMessage(targetTab.id, { 
-                        action: 'SHOW_WIDGET', 
-                        startTime: 0, 
-                        isPaused: isPaused 
-                      }).catch(() => {});
-                    }
-                  });
-                });
-              }
-            });
-            sendResponse({ status: 'started' });
-          } else {
-            isRecording = false; // Reset if cancelled/failed
-            sendResponse({ status: 'error', error: response ? response.error : 'Cancelled or Failed' });
-          }
-        });
+
+      setupOffscreenDocument("html/offscreen.html").then(() => {
+        chrome.runtime.sendMessage(
+          { target: "offscreen", action: "startRecording" },
+          (response) => {
+            if (response && response.status === "started") {
+              recordingStartTime = Date.now(); // Set actual start time now
+
+              // Show widget on the active tab
+              chrome.tabs.query(
+                { active: true, lastFocusedWindow: true },
+                function (tabs) {
+                  const targetTab = tabs[0];
+                  if (targetTab) {
+                    chrome.tabs
+                      .sendMessage(targetTab.id, {
+                        action: "SHOW_WIDGET",
+                        startTime: 0,
+                        isPaused: isPaused,
+                      })
+                      .catch(() => {
+                        chrome.scripting.executeScript(
+                          {
+                            target: { tabId: targetTab.id },
+                            files: ["js/content.js"],
+                          },
+                          () => {
+                            if (!chrome.runtime.lastError) {
+                              chrome.tabs
+                                .sendMessage(targetTab.id, {
+                                  action: "SHOW_WIDGET",
+                                  startTime: 0,
+                                  isPaused: isPaused,
+                                })
+                                .catch(() => {});
+                            }
+                          },
+                        );
+                      });
+                  }
+                },
+              );
+              sendResponse({ status: "started" });
+            } else {
+              isRecording = false; // Reset if cancelled/failed
+              sendResponse({
+                status: "error",
+                error: response ? response.error : "Cancelled or Failed",
+              });
+            }
+          },
+        );
       });
     });
     return true; // async
-  } 
-  
-  else if (request.action === 'STOP_RECORDING') {
+  } else if (request.action === "STOP_RECORDING") {
     isRecording = false;
     recordingStartTime = null;
     isPaused = false;
     headerCache.clear();
-    chrome.runtime.sendMessage({ target: 'offscreen', action: 'stopRecording' });
-    chrome.tabs.query({active: true, lastFocusedWindow: true}, function(tabs) {
-      if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, { action: 'HIDE_WIDGET' }).catch(() => {});
+    chrome.runtime.sendMessage({
+      target: "offscreen",
+      action: "stopRecording",
     });
-    sendResponse({ status: 'stopped' });
+    chrome.tabs.query(
+      { active: true, lastFocusedWindow: true },
+      function (tabs) {
+        if (tabs[0])
+          chrome.tabs
+            .sendMessage(tabs[0].id, { action: "HIDE_WIDGET" })
+            .catch(() => {});
+      },
+    );
+    sendResponse({ status: "stopped" });
     return true;
-  }
-  
-  else if (request.action === 'PAUSE_RECORDING') {
+  } else if (request.action === "PAUSE_RECORDING") {
     isPaused = true;
-    chrome.runtime.sendMessage({ target: 'offscreen', action: 'pauseRecording' });
-  } 
-  
-  else if (request.action === 'RESUME_RECORDING') {
-    isPaused = false;
-    chrome.runtime.sendMessage({ target: 'offscreen', action: 'resumeRecording' });
-  } 
-  
-  else if (request.action === 'GET_RECORDING_STATE') {
-    sendResponse({ 
-      isRecording, 
-      startTime: recordingStartTime,
-      now: Date.now() 
+    chrome.runtime.sendMessage({
+      target: "offscreen",
+      action: "pauseRecording",
     });
-  } 
-  
-  else if (request.action === 'recordingStopped') {
+  } else if (request.action === "RESUME_RECORDING") {
+    isPaused = false;
+    chrome.runtime.sendMessage({
+      target: "offscreen",
+      action: "resumeRecording",
+    });
+  } else if (request.action === "GET_RECORDING_STATE") {
+    sendResponse({
+      isRecording,
+      startTime: recordingStartTime,
+      now: Date.now(),
+    });
+  } else if (request.action === "recordingStopped") {
     pendingVideoBase64 = request.base64data;
     chrome.storage.local.set({ pendingVideo: request.base64data });
-    chrome.tabs.create({ url: chrome.runtime.getURL('html/review.html') });
+    chrome.tabs.create({ url: chrome.runtime.getURL("html/review.html") });
     chrome.offscreen.closeDocument();
   }
 
   // 3. Review & Upload
-  else if (request.action === 'GET_PENDING_VIDEO') {
+  else if (request.action === "GET_PENDING_VIDEO") {
     // Try IndexedDB first (most reliable for edited/large videos)
-    getVideoFromDB().then(blob => {
-      if (blob) {
-        const reader = new FileReader();
-        reader.onload = () => sendResponse({ videoBase64: reader.result.split(',')[1] });
-        reader.readAsDataURL(blob);
-      } else if (pendingVideoBase64) {
+    getVideoFromDB()
+      .then((blob) => {
+        if (blob) {
+          const reader = new FileReader();
+          reader.onload = () =>
+            sendResponse({ videoBase64: reader.result.split(",")[1] });
+          reader.readAsDataURL(blob);
+        } else if (pendingVideoBase64) {
+          sendResponse({ videoBase64: pendingVideoBase64 });
+        } else {
+          chrome.storage.local.get(["pendingVideo"], (res) => {
+            sendResponse({ videoBase64: res.pendingVideo });
+          });
+        }
+      })
+      .catch(() => {
         sendResponse({ videoBase64: pendingVideoBase64 });
-      } else {
-        chrome.storage.local.get(['pendingVideo'], (res) => {
-          sendResponse({ videoBase64: res.pendingVideo });
-        });
-      }
-    }).catch(() => {
-      sendResponse({ videoBase64: pendingVideoBase64 });
-    });
+      });
     return true; // async
-  } 
-  
-  else if (request.action === 'SAVE_PENDING_VIDEO') {
+  } else if (request.action === "SAVE_PENDING_VIDEO") {
     if (request.useDB) {
       // Data is already in IndexedDB, just clear memory cache
       pendingVideoBase64 = null;
@@ -1063,39 +1269,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       chrome.storage.local.set({ pendingVideo: request.videoBase64 });
     }
     sendResponse({ success: true });
-  }
-  
-  else if (request.action === 'COMMIT_UPLOAD') {
-    commitUpload(request.title, request.description, pendingVideoBase64, request.info)
-      .then(url => sendResponse({ success: true, url }))
-      .catch(err => sendResponse({ success: false, error: err.toString() }));
+  } else if (request.action === "COMMIT_UPLOAD") {
+    commitUpload(
+      request.title,
+      request.description,
+      pendingVideoBase64,
+      request.info,
+    )
+      .then((url) => sendResponse({ success: true, url }))
+      .catch((err) => sendResponse({ success: false, error: err.toString() }));
     return true;
   }
 
   // ==================== SCREENSHOT ENTRYPOINT ====================
-  else if (request.action === 'START_SCREENSHOT') {
+  else if (request.action === "START_SCREENSHOT") {
     const mode = request.mode;
     const tabId = request.tabId;
 
     (async () => {
       try {
         if (!tabId || !mode) {
-          sendResponse({ ok: false, error: 'Missing tabId/mode' });
+          sendResponse({ ok: false, error: "Missing tabId/mode" });
           return;
         }
 
         activeScreenshotFlow = { mode, tabId, startedAt: Date.now() };
 
-        if (mode === 'area') {
+        if (mode === "area") {
           await ensureTabActive(tabId);
           try {
             await ensureContentScript(tabId);
-            await chrome.tabs.sendMessage(tabId, { action: 'SCREENSHOT_START_AREA_SELECT' });
+            await chrome.tabs.sendMessage(tabId, {
+              action: "SCREENSHOT_START_AREA_SELECT",
+            });
             // Only close popup when overlay successfully started.
             sendResponse({ ok: true });
           } catch (e) {
             activeScreenshotFlow = null;
-            const msg = e?.message || 'Tidak bisa memulai area selection. Coba refresh tab setelah reload extension.';
+            const msg =
+              e?.message ||
+              "Tidak bisa memulai area selection. Coba refresh tab setelah reload extension.";
             // For area, keep it simple: let popup show the error (no new tab).
             sendResponse({ ok: false, error: msg });
           }
@@ -1105,24 +1318,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // full/scroll runs async; reply OK so popup can close
         sendResponse({ ok: true });
 
-        if (mode === 'full') {
+        if (mode === "full") {
           // Full Page mode = viewport only (instant capture)
           await captureViewport(tabId);
-        } else if (mode === 'scroll') {
+        } else if (mode === "scroll") {
           // Scroll mode = full page with interactive stop button
           activeScreenshotFlow.scrollStop = false;
           activeScreenshotFlow.scrollCancel = false;
           activeScreenshotFlow.stopAtY = null;
           await captureScrollInteractive(tabId);
         } else {
-          throw new Error('Mode screenshot tidak dikenal');
+          throw new Error("Mode screenshot tidak dikenal");
         }
-
       } catch (e) {
-        console.error('START_SCREENSHOT failed:', e);
+        console.error("START_SCREENSHOT failed:", e);
         openScreenshotError(e?.message || String(e));
       } finally {
-        if (mode !== 'area') activeScreenshotFlow = null;
+        if (mode !== "area") activeScreenshotFlow = null;
       }
     })();
 
@@ -1130,10 +1342,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   // Result from page overlay selection
-  else if (request.action === 'SCREENSHOT_AREA_RESULT') {
+  else if (request.action === "SCREENSHOT_AREA_RESULT") {
     (async () => {
       try {
-        if (!activeScreenshotFlow || activeScreenshotFlow.mode !== 'area') return;
+        if (!activeScreenshotFlow || activeScreenshotFlow.mode !== "area")
+          return;
         const tabId = activeScreenshotFlow.tabId;
 
         if (request.canceled) {
@@ -1143,30 +1356,30 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const rect = request.rect;
         const metrics = request.metrics;
-        if (!rect || !metrics) throw new Error('Area selection data missing');
+        if (!rect || !metrics) throw new Error("Area selection data missing");
 
         await ensureTabActive(tabId);
         await sleep(80);
 
         const dataUrl = await captureVisibleTabForTab(tabId);
         const dpr = metrics.devicePixelRatio || 1;
-        
+
         const meta = {
-          mode: 'area',
+          mode: "area",
           capturedAt: new Date().toISOString(),
-          tabId: tabId
+          tabId: tabId,
         };
         const cropPx = {
           x: Math.round(rect.x * dpr),
           y: Math.round(rect.y * dpr),
           width: Math.round(rect.width * dpr),
-          height: Math.round(rect.height * dpr)
+          height: Math.round(rect.height * dpr),
         };
 
         const cropped = await cropDataUrl(dataUrl, cropPx);
         await openScreenshotPreview(meta, cropped);
       } catch (e) {
-        console.error('SCREENSHOT_AREA_RESULT failed:', e);
+        console.error("SCREENSHOT_AREA_RESULT failed:", e);
         openScreenshotError(e?.message || String(e));
       } finally {
         activeScreenshotFlow = null;
@@ -1178,16 +1391,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   // Stop/cancel signals for interactive scroll mode
-  else if (request.action === 'SCREENSHOT_SCROLL_STOP') {
-    if (activeScreenshotFlow && activeScreenshotFlow.mode === 'scroll') {
+  else if (request.action === "SCREENSHOT_SCROLL_STOP") {
+    if (activeScreenshotFlow && activeScreenshotFlow.mode === "scroll") {
       activeScreenshotFlow.scrollStop = true;
-      if (typeof request.scrollY === 'number') activeScreenshotFlow.stopAtY = request.scrollY;
+      if (typeof request.scrollY === "number")
+        activeScreenshotFlow.stopAtY = request.scrollY;
     }
     sendResponse({ ok: true });
     return true;
-  }
-  else if (request.action === 'SCREENSHOT_SCROLL_CANCEL') {
-    if (activeScreenshotFlow && activeScreenshotFlow.mode === 'scroll') {
+  } else if (request.action === "SCREENSHOT_SCROLL_CANCEL") {
+    if (activeScreenshotFlow && activeScreenshotFlow.mode === "scroll") {
       activeScreenshotFlow.scrollCancel = true;
     }
     sendResponse({ ok: true });
@@ -1195,19 +1408,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   // --- APP STATE REPORTING (Cookies) ---
-  else if (request.action === 'BUGLENS_GET_COOKIES') {
+  else if (request.action === "BUGLENS_GET_COOKIES") {
     const fetchCookies = (url) => {
       chrome.cookies.getAll(url ? { url } : {}, (cookies) => {
         sendResponse({ cookies: cookies || [] });
       });
     };
 
-    if (request.url && request.url !== 'N/A' && request.url.startsWith('http')) {
+    if (
+      request.url &&
+      request.url !== "N/A" &&
+      request.url.startsWith("http")
+    ) {
       fetchCookies(request.url);
     } else {
       // Fallback: try active tab
       chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-        if (tabs[0] && tabs[0].url && tabs[0].url.startsWith('http')) {
+        if (tabs[0] && tabs[0].url && tabs[0].url.startsWith("http")) {
           fetchCookies(tabs[0].url);
         } else {
           fetchCookies(null); // Get all if possible (might be limited by permissions)
@@ -1222,95 +1439,116 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 chrome.cookies.onChanged.addListener((changeInfo) => {
   // Broadcast to any open review pages or active tabs if necessary
   // For now, we update local storage or send message to update UI
-  chrome.runtime.sendMessage({ 
-    action: 'BUGLENS_COOKIE_CHANGED', 
-    change: changeInfo 
-  }).catch(() => {}); // Avoid error when no listeners
+  chrome.runtime
+    .sendMessage({
+      action: "BUGLENS_COOKIE_CHANGED",
+      change: changeInfo,
+    })
+    .catch(() => {}); // Avoid error when no listeners
 });
 
 // Track navigations while recording, and restore floating widget when page changes
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (isRecording && changeInfo.status === 'complete' && tab.url) {
-    if (tab.url.startsWith('chrome-extension://')) return;
+  if (isRecording && changeInfo.status === "complete" && tab.url) {
+    if (tab.url.startsWith("chrome-extension://")) return;
 
-    appendLog('ACTIONS', {
+    appendLog("ACTIONS", {
       time: new Date().toLocaleTimeString(),
-      event: '🧭 Navigated to',
-      element: tab.url
+      event: "🧭 Navigated to",
+      element: tab.url,
     });
 
-    const elapsed = recordingStartTime ? Math.floor((Date.now() - recordingStartTime) / 1000) : 0;
-    chrome.tabs.sendMessage(tabId, { 
-      action: 'SHOW_WIDGET', 
-      startTime: elapsed, 
-      isPaused: isPaused 
-    }).catch(() => {});
+    const elapsed = recordingStartTime
+      ? Math.floor((Date.now() - recordingStartTime) / 1000)
+      : 0;
+    chrome.tabs
+      .sendMessage(tabId, {
+        action: "SHOW_WIDGET",
+        startTime: elapsed,
+        isPaused: isPaused,
+      })
+      .catch(() => {});
   }
 });
 
 async function commitUpload(title, desc, videoBase64, infoData) {
-  const data = await chrome.storage.local.get(['sessionLogs']);
+  const data = await chrome.storage.local.get(["sessionLogs"]);
   let logsData = data.sessionLogs || {};
-  
+
   // Wait for log queue to flush if it's still processing
   let retries = 0;
   while (isProcessingQueue && retries < 10) {
-    await new Promise(r => setTimeout(r, 100));
-    const latest = await chrome.storage.local.get(['sessionLogs']);
+    await new Promise((r) => setTimeout(r, 100));
+    const latest = await chrome.storage.local.get(["sessionLogs"]);
     logsData = latest.sessionLogs || logsData;
     retries++;
   }
-  
+
   // Ambil data info yang sudah ada (termasuk environment snapshot dan URL asli)
   const existingInfo = logsData.info || {};
-  
+
   // Gabungkan dengan infoData dari review.js (metadata visual)
   // Jangan biarkan 'url: "-"' menimpa URL asli yang sudah terekam
   const finalInfo = {
     ...existingInfo,
-    ...(infoData || {})
+    ...(infoData || {}),
   };
 
-  if ((!finalInfo.url || finalInfo.url === '-') && existingInfo.url && existingInfo.url !== '-') {
+  if (
+    (!finalInfo.url || finalInfo.url === "-") &&
+    existingInfo.url &&
+    existingInfo.url !== "-"
+  ) {
     finalInfo.url = existingInfo.url;
   }
 
   // Tambahkan cookies lengkap ke environment jika memungkinkan
-  if (finalInfo.environment && finalInfo.url && finalInfo.url !== '-') {
+  if (finalInfo.environment && finalInfo.url && finalInfo.url !== "-") {
     try {
-      const cookies = await new Promise(resolve => {
+      const cookies = await new Promise((resolve) => {
         chrome.cookies.getAll({ url: finalInfo.url }, resolve);
       });
       if (cookies && cookies.length > 0) {
         finalInfo.environment.cookies = cookies;
         finalInfo.environment.cookieCount = cookies.length;
       }
-    } catch (e) { console.error("Failed to fetch full cookies for upload:", e); }
+    } catch (e) {
+      console.error("Failed to fetch full cookies for upload:", e);
+    }
   }
 
   logsData.info = finalInfo;
 
   const token = await new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({interactive: true}, (token) => {
+    chrome.identity.getAuthToken({ interactive: true }, (token) => {
       if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
       else resolve(token);
     });
   });
-  
+
   if (!token) throw new Error("Could not authenticate with Google");
 
-  const folderId = await getOrCreateFolder(token, 'BERIBUG_Reports_App');
+  const folderId = await getOrCreateFolder(token, "BERIBUG_Reports_App");
 
-  const jsonBlob = new Blob([JSON.stringify({
-    version: "1.0",
-    title: title,
-    description: desc,
-    metadata: { 
-      date: new Date().toISOString()
-    },
-    logs: logsData
-  }, null, 2)], {type: 'application/json'});
-  
+  const jsonBlob = new Blob(
+    [
+      JSON.stringify(
+        {
+          version: "1.0",
+          title: title,
+          description: desc,
+          metadata: {
+            date: new Date().toISOString(),
+          },
+          logs: logsData,
+        },
+        null,
+        2,
+      ),
+    ],
+    { type: "application/json" },
+  );
+
   // 2. Persist to Drive
   let videoBlob;
   try {
@@ -1321,7 +1559,7 @@ async function commitUpload(title, desc, videoBase64, infoData) {
       // Fallback to memory base64 or local storage if background restarted
       let b64 = videoBase64;
       if (!b64 || b64 === "null") {
-        const res = await chrome.storage.local.get(['pendingVideo']);
+        const res = await chrome.storage.local.get(["pendingVideo"]);
         b64 = res.pendingVideo;
       }
       if (!b64) throw new Error("No video data found in memory or storage.");
@@ -1331,40 +1569,53 @@ async function commitUpload(title, desc, videoBase64, infoData) {
       for (let i = 0; i < byteCharacters.length; i++) {
         byteArray[i] = byteCharacters.charCodeAt(i);
       }
-      videoBlob = new Blob([byteArray], {type: 'video/webm'});
+      videoBlob = new Blob([byteArray], { type: "video/webm" });
     }
   } catch (err) {
     console.error("DB/Fallback Fetch failed:", err);
     throw new Error("Failed to prepare video blob for upload: " + err.message);
   }
 
-  const timeStamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, '_');
-  
-  const videoFileId = await uploadFileToDrive(token, `BERIBUG_${sanitizedTitle}_${timeStamp}.webm`, 'video/webm', videoBlob, folderId);
-  const jsonFileId = await uploadFileToDrive(token, `BERIBUG_${sanitizedTitle}_${timeStamp}.json`, 'application/json', jsonBlob, folderId);
+  const timeStamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, "_");
+
+  const videoFileId = await uploadFileToDrive(
+    token,
+    `BERIBUG_${sanitizedTitle}_${timeStamp}.webm`,
+    "video/webm",
+    videoBlob,
+    folderId,
+  );
+  const jsonFileId = await uploadFileToDrive(
+    token,
+    `BERIBUG_${sanitizedTitle}_${timeStamp}.json`,
+    "application/json",
+    jsonBlob,
+    folderId,
+  );
 
   await makeFilePublic(token, videoFileId);
   await makeFilePublic(token, jsonFileId); // Make JSON public as well to be read by Player
 
   // Give Google a moment to propagate permissions
-  await new Promise(r => setTimeout(r, 1000));
+  await new Promise((r) => setTimeout(r, 1000));
 
   resetLogs();
   pendingVideoBase64 = null;
-  chrome.storage.local.remove(['pendingVideo', 'pendingReport']);
+  chrome.storage.local.remove(["pendingVideo", "pendingReport"]);
   await clearVideoFromDB();
-  
+
   // Return Hosted Player Web App URL (Netlify Public Link)
   return `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoFileId}&l=${jsonFileId}`;
 }
 
 async function getVideoFromDB() {
   return new Promise((resolve) => {
-    const request = indexedDB.open("BERIBUG_Storage", 1);
+    const request = indexedDB.open("BERIBUG_Storage", 2);
     request.onupgradeneeded = (e) => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains("videos")) db.createObjectStore("videos");
+      if (!db.objectStoreNames.contains("videos"))
+        db.createObjectStore("videos");
     };
     request.onsuccess = (e) => {
       const db = e.target.result;
@@ -1380,7 +1631,12 @@ async function getVideoFromDB() {
 
 async function clearVideoFromDB() {
   return new Promise((resolve) => {
-    const request = indexedDB.open("BERIBUG_Storage", 1);
+    const request = indexedDB.open("BERIBUG_Storage", 2);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("videos"))
+        db.createObjectStore("videos");
+    };
     request.onsuccess = (e) => {
       const db = e.target.result;
       const transaction = db.transaction("videos", "readwrite");
@@ -1395,8 +1651,10 @@ async function clearVideoFromDB() {
 async function getOrCreateFolder(token, folderName) {
   const query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
   const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`;
-  
-  const res = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   const json = await res.json();
 
   if (json.files && json.files.length > 0) {
@@ -1404,74 +1662,90 @@ async function getOrCreateFolder(token, folderName) {
   }
 
   // Create folder
-  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
-    method: 'POST',
+  const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+    method: "POST",
     headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       name: folderName,
-      mimeType: 'application/vnd.google-apps.folder'
-    })
+      mimeType: "application/vnd.google-apps.folder",
+    }),
   });
   const createJson = await createRes.json();
   return createJson.id;
 }
 
-async function uploadFileToDrive(token, filename, mimeType, fileBlob, folderId) {
+async function uploadFileToDrive(
+  token,
+  filename,
+  mimeType,
+  fileBlob,
+  folderId,
+) {
   // 1. Create file metadata
   const metadata = {
     name: filename,
     mimeType: mimeType,
-    parents: [folderId]
+    parents: [folderId],
   };
 
-  const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
-    method: 'POST',
+  const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+    method: "POST",
     headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify(metadata)
+    body: JSON.stringify(metadata),
   });
-  
+
   if (!createRes.ok) {
-    throw new Error(`Failed to create file metadata: ${createRes.status} ${await createRes.text()}`);
+    throw new Error(
+      `Failed to create file metadata: ${createRes.status} ${await createRes.text()}`,
+    );
   }
-  
+
   const fileData = await createRes.json();
   const fileId = fileData.id;
 
   // 2. Upload file content (Simple Media Upload - supports up to 5TB)
-  const uploadRes = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
-    method: 'PATCH',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': mimeType
+  const uploadRes = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": mimeType,
+      },
+      body: fileBlob,
     },
-    body: fileBlob
-  });
+  );
 
   if (!uploadRes.ok) {
-    throw new Error(`Failed to upload file content: ${uploadRes.status} ${await uploadRes.text()}`);
+    throw new Error(
+      `Failed to upload file content: ${uploadRes.status} ${await uploadRes.text()}`,
+    );
   }
 
   return fileId;
 }
 
 async function makeFilePublic(token, fileId) {
-  await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
+  await fetch(
+    `https://www.googleapis.com/drive/v3/files/${fileId}/permissions`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        role: "reader",
+        type: "anyone",
+      }),
     },
-    body: JSON.stringify({
-      role: 'reader',
-      type: 'anyone'
-    })
-  });
+  );
 }
 
 async function createMondayTicket(apiKey, boardId, videoUrl, timestamp) {
@@ -1484,19 +1758,19 @@ async function createMondayTicket(apiKey, boardId, videoUrl, timestamp) {
       ) { id }
     }
   `;
-  
+
   // Create item first
-  const res = await fetch('https://api.monday.com/v2', {
-    method: 'POST',
+  const res = await fetch("https://api.monday.com/v2", {
+    method: "POST",
     headers: {
-      'Authorization': apiKey,
-      'API-Version': '2023-10',
-      'Content-Type': 'application/json'
+      Authorization: apiKey,
+      "API-Version": "2023-10",
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify({ query })
+    body: JSON.stringify({ query }),
   });
   const json = await res.json();
-  
+
   if (json.errors) {
     console.error("Monday API error:", json.errors);
     return;
@@ -1514,13 +1788,13 @@ async function createMondayTicket(apiKey, boardId, videoUrl, timestamp) {
     }
   `;
 
-  await fetch('https://api.monday.com/v2', {
-    method: 'POST',
+  await fetch("https://api.monday.com/v2", {
+    method: "POST",
     headers: {
-      'Authorization': apiKey,
-      'API-Version': '2023-10',
-      'Content-Type': 'application/json'
+      Authorization: apiKey,
+      "API-Version": "2023-10",
+      "Content-Type": "application/json",
     },
-    body: JSON.stringify({ query: updateQuery })
+    body: JSON.stringify({ query: updateQuery }),
   });
 }
