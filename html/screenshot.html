@@ -56,41 +56,102 @@
     </div>
   </div>
 
-  <!-- Preview & Download Screen -->
-  <div id="previewScreen" class="screen">
-    <div class="preview-header">
-      <h2>📸 Preview Screenshot</h2>
-      <button id="btnClosePreview" class="close-btn">✕</button>
-    </div>
-
-    <div class="preview-container">
-      <img id="previewImage" class="preview-image" src="" alt="Preview">
-    </div>
-
-    <div class="preview-actions">
-      <div class="action-group">
-        <label for="screenshotTitle">Judul:</label>
-        <input type="text" id="screenshotTitle" placeholder="Contoh: Bug Login Error" value="Screenshot">
+  <!-- Preview & Editor Screen (Modern) -->
+  <div id="previewScreen" class="screen editor-screen">
+    <!-- Top Toolbar -->
+    <div class="editor-top-bar">
+      <div class="toolbar-left">
+        <button id="btnClosePreview" class="icon-btn" title="Tutup">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+        <input type="text" id="screenshotTitle" class="editor-title-input" placeholder="Nama screenshot..." value="Screenshot">
       </div>
 
-      <div class="button-group">
-        <button id="btnDownload" class="btn btn-primary">
-          <span>⬇️</span> Download
-        </button>
+      <div class="toolbar-center">
+        <div class="zoom-controls">
+          <button class="icon-btn" id="btnZoomOut" title="Perkecil">−</button>
+          <span class="zoom-display" id="zoomDisplay">100%</span>
+          <button class="icon-btn" id="btnZoomIn" title="Perbesar">+</button>
+          <button class="icon-btn" id="btnZoomFit" title="Sesuaikan layar">◻</button>
+        </div>
+      </div>
+
+      <div class="toolbar-right">
+        <div class="tool-buttons">
+          <button class="tool-btn" id="btnPencil" title="Pensil" data-tool="pencil">✏️</button>
+          <button class="tool-btn" id="btnHighlighter" title="Highlighter" data-tool="highlighter">🖍️</button>
+          <button class="tool-btn" id="btnRectangle" title="Kotak" data-tool="rectangle">▭</button>
+          <button class="tool-btn" id="btnArrow" title="Panah" data-tool="arrow">→</button>
+          <button class="tool-btn" id="btnText" title="Teks" data-tool="text">T</button>
+          <button class="tool-btn" id="btnBlur" title="Blur" data-tool="blur">◆</button>
+          <button class="icon-btn" id="btnUndo" title="Batalkan">↶</button>
+          <button class="icon-btn" id="btnRedo" title="Ulangi">↷</button>
+          <button class="icon-btn" id="btnClearAll" title="Hapus semua">🗑️</button>
+        </div>
+
+        <div class="action-buttons">
+          <button id="btnDownload" class="btn btn-primary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="7 10 12 15 17 10"></polyline>
+              <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            Download
+          </button>
+          <button id="btnSaveToDrive" class="btn btn-success">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+              <polyline points="17 21 17 13 7 13 7 21"></polyline>
+              <polyline points="7 3 7 8 15 8"></polyline>
+            </svg>
+            Drive
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Canvas Workspace -->
+    <div class="editor-workspace">
+      <div class="canvas-container" id="canvasContainer">
+        <!-- 3-Layer Canvas System (dynamically created) -->
+        <!-- baseCanvas: original image -->
+        <!-- annotationCanvas: user drawings -->
+        <!-- interactionCanvas: preview shapes -->
+        <!-- displayCanvas: rendered output (what user sees) -->
         
-        <button id="btnSaveToDrive" class="btn btn-success">
-          <span>☁️</span> Simpan ke Drive
-        </button>
-
-        <button id="btnRetake" class="btn btn-secondary">
-          <span>🔄</span> Ulang
-        </button>
+        <!-- Hidden img element used only for loading source -->
+        <img id="previewImage" src="" alt="Preview" style="display: none;">
       </div>
     </div>
 
-    <!-- Upload Status -->
-    <div id="uploadStatus" class="upload-status hidden">
-      <div class="status-content">
+    <!-- Floating Tool Settings -->
+    <div class="floating-tools hidden" id="floatingTools">
+      <div class="tool-settings">
+        <div class="setting-group">
+          <label>Warna:</label>
+          <div class="color-picker">
+            <input type="color" id="toolColor" value="#ff0000" class="color-input">
+          </div>
+        </div>
+        <div class="setting-group">
+          <label>Ukuran:</label>
+          <input type="range" id="toolSize" min="1" max="50" value="3" class="size-slider">
+          <span id="sizeValue">3</span>px
+        </div>
+        <div class="setting-group">
+          <label>Opacity:</label>
+          <input type="range" id="toolOpacity" min="0.1" max="1" step="0.1" value="1" class="opacity-slider">
+          <span id="opacityValue">100</span>%
+        </div>
+      </div>
+    </div>
+
+    <!-- Upload Status Modal -->
+    <div id="uploadStatus" class="modal hidden">
+      <div class="modal-content">
         <div id="statusIcon" class="status-icon">⏳</div>
         <p id="statusText">Uploading...</p>
         <div id="statusProgress" class="progress-bar">
@@ -99,14 +160,19 @@
       </div>
     </div>
 
-    <!-- Success Message -->
-    <div id="successMessage" class="success-message hidden">
-      <div class="message-content">
+    <!-- Success Modal -->
+    <div id="successMessage" class="modal hidden">
+      <div class="modal-content">
         <div class="success-icon">✅</div>
         <h3>Screenshot Tersimpan!</h3>
         <p id="successText">Screenshot berhasil disimpan ke Google Drive</p>
         <button id="btnViewInDrive" class="btn btn-primary">Lihat di My Reports</button>
       </div>
+    </div>
+
+    <!-- Retry Button -->
+    <div id="retryContainer" class="retry-container hidden">
+      <button id="btnRetake" class="btn btn-secondary">🔄 Ulang Screenshot</button>
     </div>
   </div>
 
