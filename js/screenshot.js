@@ -55,6 +55,10 @@ const editorState = {
 // Animation frame tracking
 let renderFrameId = null;
 
+function getDevicePixelRatio() {
+  return window.devicePixelRatio || 1;
+}
+
 // Editor initialization guard
 let editorInitialized = false;
 
@@ -88,9 +92,7 @@ function getFloatingTools() { return safeEl('floatingTools'); }
 function getZoomDisplay() { return safeEl('zoomDisplay'); }
 function getToolColorInput() { return safeEl('toolColor'); }
 function getToolSizeInput() { return safeEl('toolSize'); }
-function getToolOpacityInput() { return safeEl('toolOpacity'); }
 function getSizeValue() { return safeEl('sizeValue'); }
-function getOpacityValue() { return safeEl('opacityValue'); }
 function getUploadStatus() { return safeEl('uploadStatus'); }
 function getSuccessMessage() { return safeEl('successMessage'); }
 function getStatusIcon() { return safeEl('statusIcon'); }
@@ -394,6 +396,8 @@ function createDisplayCanvas() {
   displayCanvas.style.transform = 'translate(-50%, -50%)';
   displayCanvas.style.cursor = editorState.currentTool === 'none' ? 'default' : 'crosshair';
   displayCanvas.style.border = '1px solid #ccc';
+  displayCanvas.style.width = '0px';
+  displayCanvas.style.height = '0px';
 
   canvasContainer.appendChild(displayCanvas);
 
@@ -411,11 +415,16 @@ function renderCanvas() {
   // Calculate display canvas size based on zoom
   const displayWidth = Math.ceil(originalImageWidth * viewport.zoom);
   const displayHeight = Math.ceil(originalImageHeight * viewport.zoom);
+  const dpr = getDevicePixelRatio();
 
-  displayCanvas.width = displayWidth;
-  displayCanvas.height = displayHeight;
+  displayCanvas.style.width = `${displayWidth}px`;
+  displayCanvas.style.height = `${displayHeight}px`;
+  displayCanvas.width = Math.max(1, Math.round(displayWidth * dpr));
+  displayCanvas.height = Math.max(1, Math.round(displayHeight * dpr));
 
   const ctx = displayCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
 
   // Clear
   ctx.fillStyle = '#fff';
