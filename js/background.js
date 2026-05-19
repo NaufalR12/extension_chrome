@@ -1639,10 +1639,40 @@ async function clearVideoFromDB() {
     };
     request.onsuccess = (e) => {
       const db = e.target.result;
-      const transaction = db.transaction("videos", "readwrite");
-      const store = transaction.objectStore("videos");
-      store.delete("pendingVideo");
-      transaction.oncomplete = () => resolve();
+      try {
+        if (!db.objectStoreNames.contains("videos")) {
+          db.close();
+          const cleanup = indexedDB.deleteDatabase("BERIBUG_Storage");
+          cleanup.onsuccess = () => {
+            const recreate = indexedDB.open("BERIBUG_Storage", 2);
+            recreate.onupgradeneeded = (ev) => {
+              const freshDb = ev.target.result;
+              if (!freshDb.objectStoreNames.contains("videos")) {
+                freshDb.createObjectStore("videos");
+              }
+            };
+            recreate.onsuccess = (ev2) => {
+              const freshDb = ev2.target.result;
+              const transaction = freshDb.transaction("videos", "readwrite");
+              const store = transaction.objectStore("videos");
+              store.delete("pendingVideo");
+              transaction.oncomplete = () => resolve();
+              transaction.onerror = () => resolve();
+            };
+            recreate.onerror = () => resolve();
+          };
+          cleanup.onerror = () => resolve();
+          return;
+        }
+
+        const transaction = db.transaction("videos", "readwrite");
+        const store = transaction.objectStore("videos");
+        store.delete("pendingVideo");
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => resolve();
+      } catch (err) {
+        resolve();
+      }
     };
     request.onerror = () => resolve();
   });
