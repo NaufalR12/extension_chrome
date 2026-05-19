@@ -82,11 +82,8 @@
       <div class="toolbar-right">
         <div class="tool-buttons">
           <button class="tool-btn" id="btnPencil" title="Pensil" data-tool="pencil">✏️</button>
-          <button class="tool-btn" id="btnHighlighter" title="Highlighter" data-tool="highlighter">🖍️</button>
           <button class="tool-btn" id="btnRectangle" title="Kotak" data-tool="rectangle">▭</button>
           <button class="tool-btn" id="btnArrow" title="Panah" data-tool="arrow">→</button>
-          <button class="tool-btn" id="btnText" title="Teks" data-tool="text">T</button>
-          <button class="tool-btn" id="btnBlur" title="Blur" data-tool="blur">◆</button>
           <button class="icon-btn" id="btnUndo" title="Batalkan">↶</button>
           <button class="icon-btn" id="btnRedo" title="Ulangi">↷</button>
           <button class="icon-btn" id="btnClearAll" title="Hapus semua">🗑️</button>
@@ -142,9 +139,7 @@
           <span id="sizeValue">3</span>px
         </div>
         <div class="setting-group">
-          <label>Opacity:</label>
-          <input type="range" id="toolOpacity" min="0.1" max="1" step="0.1" value="1" class="opacity-slider">
-          <span id="opacityValue">100</span>%
+          <!-- Opacity control removed per user request -->
         </div>
       </div>
     </div>
@@ -166,7 +161,11 @@
         <div class="success-icon">✅</div>
         <h3>Screenshot Tersimpan!</h3>
         <p id="successText">Screenshot berhasil disimpan ke Google Drive</p>
-        <button id="btnViewInDrive" class="btn btn-primary">Lihat di My Reports</button>
+        <button id="btnCloseSuccess" class="icon-btn close-x" title="Tutup">✖</button>
+        <div class="success-actions">
+          <button id="btnViewInDrive" class="btn btn-primary">Lihat di My Reports</button>
+          <button id="btnUpdateInDrive" class="btn btn-secondary hidden">Perbarui di Drive</button>
+        </div>
       </div>
     </div>
 

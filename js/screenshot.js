@@ -117,6 +117,51 @@ function switchScreen(screenId) {
   }
 }
 
+/**
+ * Update an existing Drive file with the latest image (overwrite)
+ */
+async function updateScreenshotOnDrive() {
+  try {
+    const successMessage = getSuccessMessage();
+    const fileId = successMessage?.dataset?.driveFileId;
+    if (!fileId) throw new Error('No Drive file id available to update');
+
+    await ensureImageReady();
+
+    const finalImageUrl = await exportFinalImage();
+    const imgRes = await fetch(finalImageUrl);
+    const imgBlob = await imgRes.blob();
+
+    const title = getScreenshotTitle()?.value || 'Screenshot';
+    const safe = sanitizeTitleForFileName(title);
+
+    const metadata = { name: `BERIBUG_${safe}_${makeTimeStamp()}.png` };
+    const formData = new FormData();
+    formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    formData.append('file', imgBlob);
+
+    const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&fields=id,webViewLink,webContentLink`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${authToken}` },
+      body: formData
+    });
+
+    if (!res.ok) throw new Error('Update failed: ' + res.status);
+    const json = await res.json();
+
+    const successText = getSuccessText();
+    if (successText) {
+      const viewLink = json.webViewLink || `https://drive.google.com/file/d/${json.id}/view`;
+      successText.innerHTML = `Link screenshot: <a href="${viewLink}" target="_blank" rel="noreferrer">${viewLink}</a> (terbaru)`;
+    }
+
+    alert('Gambar berhasil diperbarui di Drive');
+  } catch (err) {
+    console.error('[BERIBUG] Update to Drive failed:', err);
+    alert('Update gagal: ' + err.message);
+  }
+}
+
 function sanitizeTitleForFileName(title) {
   return String(title || 'Screenshot').trim().replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'Screenshot';
 }
@@ -928,16 +973,28 @@ async function saveScreenshotToDrive() {
 
     showSuccessMessage();
 
+    // Persist last saved file id so user can update it later
+    try {
+      await chrome.storage.local.set({ lastSavedScreenshotFileId: imgFile.id });
+    } catch (e) {
+      console.warn('[BERIBUG] Could not persist lastSavedScreenshotFileId', e);
+    }
+
+    const successMessage = getSuccessMessage();
+    if (successMessage) {
+      successMessage.dataset.driveFileId = imgFile.id;
+      const btnUpdate = document.getElementById('btnUpdateInDrive');
+      if (btnUpdate) btnUpdate.classList.remove('hidden');
+    }
+
     const btnViewInDrive = getBtnViewInDrive();
     if (btnViewInDrive) {
       btnViewInDrive.onclick = () => {
         chrome.tabs.create({ url: chrome.runtime.getURL('html/home.html') });
-        window.close();
       };
     }
 
-    chrome.storage.local.remove(['pendingScreenshot']);
-    
+    // Do not remove pendingScreenshot so user can continue editing after saving
     if (btnSaveToDrive) btnSaveToDrive.disabled = false;
   } catch (err) {
     console.error('[BERIBUG] Save to Drive failed:', err);
@@ -1021,13 +1078,11 @@ async function initializeEditor() {
       console.warn('[BERIBUG] Error setting up zoom buttons:', e);
     }
 
-    // Setup tool settings
+    // Setup tool settings (opacity control removed)
     try {
       const toolColorInput = getToolColorInput();
       const toolSizeInput = getToolSizeInput();
-      const toolOpacityInput = getToolOpacityInput();
       const sizeValue = getSizeValue();
-      const opacityValue = getOpacityValue();
 
       if (toolColorInput) {
         toolColorInput.addEventListener('change', (e) => {
@@ -1039,13 +1094,6 @@ async function initializeEditor() {
         toolSizeInput.addEventListener('input', (e) => {
           editorState.toolSize = parseInt(e.target.value);
           if (sizeValue) sizeValue.textContent = editorState.toolSize;
-        });
-      }
-
-      if (toolOpacityInput) {
-        toolOpacityInput.addEventListener('input', (e) => {
-          editorState.toolOpacity = parseFloat(e.target.value);
-          if (opacityValue) opacityValue.textContent = Math.round(editorState.toolOpacity * 100);
         });
       }
 
@@ -1092,6 +1140,18 @@ async function initializeEditor() {
       console.log('[BERIBUG] Action buttons enabled');
     } catch (e) {
       console.warn('[BERIBUG] Error enabling action buttons:', e);
+    }
+
+    // Success modal controls: close (x) and update-in-drive
+    try {
+      const btnCloseSuccess = document.getElementById('btnCloseSuccess');
+      const btnUpdateInDrive = document.getElementById('btnUpdateInDrive');
+      if (btnCloseSuccess) btnCloseSuccess.addEventListener('click', () => {
+        const sm = getSuccessMessage(); if (sm) sm.classList.add('hidden');
+      });
+      if (btnUpdateInDrive) btnUpdateInDrive.addEventListener('click', updateScreenshotOnDrive);
+    } catch (e) {
+      console.warn('[BERIBUG] Error setting up success modal controls:', e);
     }
 
     if (loadingText) loadingText.textContent = '';
