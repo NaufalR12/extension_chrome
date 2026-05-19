@@ -318,11 +318,19 @@ async function performAppendLog(type, payload) {
       );
       if (existing) {
         existing.requestBody = payload.requestBody;
+        existing.payloadText = payload.payloadText;
+        existing.parsedPayload = payload.parsedPayload;
+        existing.payloadType = payload.payloadType;
         existing.responseBody = payload.responseBody;
         if (payload.requestHeaders)
           existing.requestHeaders = {
             ...existing.requestHeaders,
             ...payload.requestHeaders,
+          };
+        if (payload.responseHeaders)
+          existing.responseHeaders = {
+            ...existing.responseHeaders,
+            ...payload.responseHeaders,
           };
         await chrome.storage.local.set({ sessionLogs: logs });
         return;

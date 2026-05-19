@@ -702,6 +702,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     function renderDetailTab(tab, req) {
+      const dList = document.getElementById("detailsHeaders");
       const pCont = document.getElementById("detailsPayload");
       const rCont = document.getElementById("detailsResponse");
 
@@ -733,38 +734,181 @@ document.addEventListener("DOMContentLoaded", () => {
         }
         dList.innerHTML = html;
       } else if (tab === "payload") {
-        pCont.innerHTML = req.isStatic
-          ? '<div class="p-4 text-gray-500">Not available for static resources</div>'
-          : `<div class="detail-value" style="white-space:pre-wrap;background:#f8f9fa;padding:16px;">${req.requestBody || "(No payload)"}</div>`;
+        if (req.isStatic) {
+          pCont.innerHTML = '<div class="p-4 text-gray-500">Not available for static resources</div>';
+        } else {
+          pCont.innerHTML = renderPrettyPayload(req);
+        }
       } else if (tab === "response") {
-        rCont.innerHTML = req.isStatic
-          ? '<div class="p-4 text-gray-500">Not available for static resources</div>'
-          : `<div class="detail-value" style="white-space:pre-wrap;background:#f8f9fa;padding:16px;">${req.responseBody || "(No response captured)"}</div>`;
+        if (req.isStatic) {
+          rCont.innerHTML = '<div class="p-4 text-gray-500">Not available for static resources</div>';
+        } else {
+          const respBody = req.responseBody || '';
+          rCont.innerHTML = respBody 
+            ? `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(respBody)}</pre>`
+            : '<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(No response captured)</div>';
+        }
       }
+    }
+
+    function renderPrettyPayload(req) {
+      const payloadType = String(req && req.payloadType ? req.payloadType : '').toLowerCase();
+      const parsedPayload = req ? req.parsedPayload : null;
+      const payloadText = req && req.payloadText ? String(req.payloadText) : (req && req.requestBody ? String(req.requestBody) : '');
+      
+      if (!payloadText && !parsedPayload) {
+        return '<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(No payload captured)</div>';
+      }
+
+      if (payloadType === 'binary') {
+        return '<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(Binary payload)</div>';
+      }
+
+      // GraphQL
+      if (payloadType === 'graphql' || (parsedPayload && typeof parsedPayload === 'object' && parsedPayload.query)) {
+        const query = escapeHtml(parsedPayload.query || '');
+        const variables = parsedPayload.variables ? escapeHtml(JSON.stringify(parsedPayload.variables, null, 2)) : '(No variables)';
+        const operation = parsedPayload.operationName ? escapeHtml(String(parsedPayload.operationName)) : '(None)';
+        return `
+          <div class="detail-section">
+            <div class="detail-section-header">GraphQL</div>
+            <div class="detail-item"><div class="detail-label">Operation</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;">${operation}</div></div>
+            <div class="detail-item"><div class="detail-label">Query</div><div class="detail-value"><pre style="margin:0;white-space:pre-wrap;background:#f8f9fa;padding:12px;border-radius:4px;font-size:11px;font-family:monospace;">${query}</pre></div></div>
+            <div class="detail-item"><div class="detail-label">Variables</div><div class="detail-value"><pre style="margin:0;white-space:pre-wrap;background:#f8f9fa;padding:12px;border-radius:4px;font-size:11px;font-family:monospace;">${variables}</pre></div></div>
+          </div>`;
+      }
+
+      // Form-Data
+      if (payloadType === 'multipart/form-data' && parsedPayload && typeof parsedPayload === 'object') {
+        return renderObjectAsTable(parsedPayload, 'Form Data');
+      }
+
+      // Try JSON
+      try {
+        if (payloadText) {
+          const parsed = JSON.parse(payloadText);
+          const pretty = JSON.stringify(parsed, null, 2);
+          return `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(pretty)}</pre>`;
+        }
+      } catch (e) {}
+
+      // Form-urlencoded
+      if (payloadType === 'application/x-www-form-urlencoded' || (payloadText && payloadText.includes('=') && payloadText.includes('&'))) {
+        try {
+          const params = new URLSearchParams(payloadText);
+          const entries = [];
+          for (let [k, v] of params) {
+            entries.push([k, v]);
+          }
+          return renderKeyValueRows(entries, 'Form Parameters');
+        } catch (e) {}
+      }
+
+      // Default: raw text
+      return `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(payloadText)}</pre>`;
+    }
+
+    function renderObjectAsTable(obj, title) {
+      const rows = Object.entries(obj || {}).map(([key, value]) => {
+        const displayValue = Array.isArray(value) || (value && typeof value === 'object')
+          ? escapeHtml(JSON.stringify(value, null, 2))
+          : escapeHtml(String(value));
+        return `<div class="detail-item"><div class="detail-label">${escapeHtml(key)}</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;word-break:break-word;font-size:11px;">${displayValue}</div></div>`;
+      }).join('');
+      return `<div class="detail-section"><div class="detail-section-header">${escapeHtml(title)}</div>${rows}</div>`;
+    }
+
+    function renderKeyValueRows(entries, title) {
+      const rows = entries.map(([key, value]) => 
+        `<div class="detail-item"><div class="detail-label">${escapeHtml(String(key))}</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;word-break:break-word;font-size:11px;">${escapeHtml(String(value))}</div></div>`
+      ).join('');
+      return `<div class="detail-section"><div class="detail-section-header">${escapeHtml(title)}</div>${rows}</div>`;
+    }
+
+    function escapeHtml(text) {
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
 
     // Copy / cURL Handlers
     document.querySelectorAll(".details-header .pill-sm").forEach((btn) => {
-      btn.addEventListener("click", () => {
+      btn.addEventListener("click", async () => {
         if (!selectedReq) return;
         const text = btn.innerText.toLowerCase();
+        const originalText = btn.innerText;
+        
         if (text === "copy") {
-          const body = selectedReq.responseBody || "";
-          navigator.clipboard.writeText(body);
-          btn.innerText = "Copied!";
-          setTimeout(() => (btn.innerText = "Copy"), 2000);
-        } else if (text === "curl") {
-          const curl = `curl '${selectedReq.url}' -X ${selectedReq.method} ${Object.entries(
-            selectedReq.requestHeaders || {},
-          )
-            .map(([k, v]) => `-H '${k}: ${v}'`)
-            .join(" ")}`;
-          navigator.clipboard.writeText(curl);
-          btn.innerText = "Copied!";
-          setTimeout(() => (btn.innerText = "cURL"), 2000);
+          try {
+            const payload = selectedReq.payloadText || selectedReq.requestBody || '';
+            if (!payload) {
+              btn.innerText = 'Nothing to copy';
+              setTimeout(() => (btn.innerText = originalText), 2000);
+              return;
+            }
+            await navigator.clipboard.writeText(payload);
+            btn.innerText = 'Copied!';
+            setTimeout(() => (btn.innerText = originalText), 2000);
+          } catch (err) {
+            console.error('[BERIBUG] Copy failed:', err.message);
+            btn.innerText = 'Copy failed';
+            setTimeout(() => (btn.innerText = originalText), 2000);
+          }
+        } else if (text.includes('curl')) {
+          try {
+            const curl = buildCurlCommand(selectedReq);
+            await navigator.clipboard.writeText(curl);
+            btn.innerText = 'Copied!';
+            setTimeout(() => (btn.innerText = originalText), 2000);
+          } catch (err) {
+            console.error('[BERIBUG] cURL copy failed:', err.message);
+            btn.innerText = 'Copy failed';
+            setTimeout(() => (btn.innerText = originalText), 2000);
+          }
         }
       });
     });
+
+    function buildCurlCommand(req) {
+      const headers = req.requestHeaders || {};
+      const headerFlags = Object.entries(headers)
+        .filter(([k]) => k.toLowerCase() !== 'content-length')
+        .map(([k, v]) => `-H '${escapeSingleQuotes(`${k}: ${v}`)}'`)
+        .join(' ');
+      const method = req.method || 'GET';
+      const payloadType = String(req.payloadType || '').toLowerCase();
+      const body = req.payloadText || req.requestBody || '';
+      let bodyFlag = '';
+
+      if (payloadType === 'multipart/form-data' && req.parsedPayload && typeof req.parsedPayload === 'object') {
+        const formFlags = [];
+        Object.entries(req.parsedPayload).forEach(([key, value]) => {
+          if (Array.isArray(value)) {
+            value.forEach(item => {
+              if (item && typeof item === 'object' && item.name) {
+                formFlags.push(`-F '${escapeSingleQuotes(`${key}=@${item.name}`)}'`);
+              } else {
+                formFlags.push(`-F '${escapeSingleQuotes(`${key}=${item}`)}'`);
+              }
+            });
+          } else {
+            formFlags.push(`-F '${escapeSingleQuotes(`${key}=${value}`)}'`);
+          }
+        });
+        bodyFlag = formFlags.join(' ');
+      } else if (body) {
+        bodyFlag = `--data-raw '${escapeSingleQuotes(body)}'`;
+      }
+
+      return `curl '${escapeSingleQuotes(req.url || '')}' -X ${method} ${headerFlags} ${bodyFlag}`.replace(/\s+/g, ' ').trim();
+    }
+
+    function escapeSingleQuotes(s) {
+      return String(s).replace(/'/g, "'\\''");
+    }
 
     // Network Listeners
     document
