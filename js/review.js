@@ -672,6 +672,28 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!req) return;
       const networkTab = document.getElementById("tabNetwork");
       networkTab.classList.add("detail-open");
+      // Dynamically show/hide Payload and Response tabs based on available data
+      const tabPayload = document.querySelector('.d-tab[data-dtool="payload"]');
+      const tabResponse = document.querySelector('.d-tab[data-dtool="response"]');
+      const pCont = document.getElementById('detailsPayload');
+      const rCont = document.getElementById('detailsResponse');
+
+      const hasPayload = !req.isStatic && (!!req.payloadText || !!req.requestBody || (req.parsedPayload && Object.keys(req.parsedPayload || {}).length > 0));
+      const hasResponse = !req.isStatic && !!(req.responseBody && String(req.responseBody).length > 0);
+
+      if (tabPayload) tabPayload.style.display = hasPayload ? '' : 'none';
+      if (tabResponse) tabResponse.style.display = hasResponse ? '' : 'none';
+
+      // Hide panel contents if not present
+      if (pCont) pCont.style.display = hasPayload ? '' : 'none';
+      if (rCont) rCont.style.display = hasResponse ? '' : 'none';
+
+      // Ensure Headers tab is active by default
+      dTabs.forEach((t) => t.classList.remove('active'));
+      dPanels.forEach((p) => p.classList.remove('active'));
+      document.querySelector('.d-tab[data-dtool="headers"]').classList.add('active');
+      dList.classList.add('active');
+
       renderDetailTab("headers", req);
     }
 
@@ -834,43 +856,24 @@ document.addEventListener("DOMContentLoaded", () => {
         .replace(/'/g, '&#39;');
     }
 
-    // Copy / cURL Handlers
-    document.querySelectorAll(".details-header .pill-sm").forEach((btn) => {
-      btn.addEventListener("click", async () => {
+    // Copy as cURL (bash) handler — attach to the specific button
+    const btnCurlNet = document.getElementById('btnCurlNet');
+    if (btnCurlNet) {
+      btnCurlNet.addEventListener('click', async () => {
         if (!selectedReq) return;
-        const text = btn.innerText.toLowerCase();
-        const originalText = btn.innerText;
-        
-        if (text === "copy") {
-          try {
-            const payload = selectedReq.payloadText || selectedReq.requestBody || '';
-            if (!payload) {
-              btn.innerText = 'Nothing to copy';
-              setTimeout(() => (btn.innerText = originalText), 2000);
-              return;
-            }
-            await navigator.clipboard.writeText(payload);
-            btn.innerText = 'Copied!';
-            setTimeout(() => (btn.innerText = originalText), 2000);
-          } catch (err) {
-            console.error('[BERIBUG] Copy failed:', err.message);
-            btn.innerText = 'Copy failed';
-            setTimeout(() => (btn.innerText = originalText), 2000);
-          }
-        } else if (text.includes('curl')) {
-          try {
-            const curl = buildCurlCommand(selectedReq);
-            await navigator.clipboard.writeText(curl);
-            btn.innerText = 'Copied!';
-            setTimeout(() => (btn.innerText = originalText), 2000);
-          } catch (err) {
-            console.error('[BERIBUG] cURL copy failed:', err.message);
-            btn.innerText = 'Copy failed';
-            setTimeout(() => (btn.innerText = originalText), 2000);
-          }
+        const originalText = btnCurlNet.innerText;
+        try {
+          const curl = buildCurlCommand(selectedReq);
+          await navigator.clipboard.writeText(curl);
+          btnCurlNet.innerText = 'Copied!';
+          setTimeout(() => (btnCurlNet.innerText = originalText), 2000);
+        } catch (err) {
+          console.error('[BERIBUG] cURL copy failed:', err.message);
+          btnCurlNet.innerText = 'Copy failed';
+          setTimeout(() => (btnCurlNet.innerText = originalText), 2000);
         }
       });
-    });
+    }
 
     function buildCurlCommand(req) {
       const headers = req.requestHeaders || {};
@@ -903,7 +906,20 @@ document.addEventListener("DOMContentLoaded", () => {
         bodyFlag = `--data-raw '${escapeSingleQuotes(body)}'`;
       }
 
-      return `curl '${escapeSingleQuotes(req.url || '')}' -X ${method} ${headerFlags} ${bodyFlag}`.replace(/\s+/g, ' ').trim();
+      // Preserve scheme even for chrome-extension/blob/data etc.
+      const url = String(req.url || '');
+      const schemeMatch = url.match(/^([a-z0-9+.-]+):/i);
+      const scheme = schemeMatch ? schemeMatch[1].toLowerCase() : '';
+      const needsWarning = scheme && !['http', 'https'].includes(scheme);
+      const warning = needsWarning
+        ? "# This URL scheme may not be executable outside browser context\n"
+        : '';
+
+      const parts = ["curl", `'${escapeSingleQuotes(url)}'`, "-X", method];
+      if (headerFlags) parts.push(headerFlags);
+      if (bodyFlag) parts.push(bodyFlag);
+
+      return (warning + parts.join(' ').replace(/\s+/g, ' ').trim());
     }
 
     function escapeSingleQuotes(s) {
