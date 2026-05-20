@@ -314,37 +314,72 @@
   window.fetch = async function(...args) {
     const startTime = performance.now();
     const time = new Date().toISOString();
-    let url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : 'unknown');
-    let method = args[1] && args[1].method ? args[1].method : 'GET';
-    let requestHeaders = args[1] && args[1].headers ? args[1].headers : {};
-    let rawBody = args[1] && args[1].body ? args[1].body : null;
-    
+
+    // Support calling fetch(Request) and fetch(url, init)
+    let url = 'unknown';
+    let method = 'GET';
+    let requestHeaders = {};
+    let rawBody = null;
+
+    try {
+      if (args[0] && args[0] instanceof Request) {
+        const reqObj = args[0];
+        url = reqObj.url || 'unknown';
+        method = (reqObj.method || 'GET').toUpperCase();
+        // Read headers from Request
+        try { reqObj.headers.forEach((v, k) => (requestHeaders[k] = v)); } catch (e) {}
+        // Try to read body (may be stream) via clone()
+        try {
+          const cloned = reqObj.clone();
+          rawBody = await cloned.text();
+        } catch (e) {
+          rawBody = null;
+        }
+      } else {
+        url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url ? args[0].url : 'unknown');
+        const init = args[1] || {};
+        method = (init.method || 'GET').toUpperCase();
+        const hdrs = init.headers || {};
+        // Normalize headers: Headers instance, array or plain object
+        if (hdrs instanceof Headers) {
+          try { hdrs.forEach((v, k) => (requestHeaders[k] = v)); } catch (e) {}
+        } else if (Array.isArray(hdrs)) {
+          hdrs.forEach(([k, v]) => (requestHeaders[k] = v));
+        } else if (typeof hdrs === 'object') {
+          requestHeaders = Object.assign({}, hdrs);
+        }
+        rawBody = init.body || null;
+      }
+    } catch (e) {
+      console.warn('[BERIBUG] Failed to normalize fetch args', e && e.message);
+    }
+
     // Get Content-Type header
     let contentType = '';
-    if (requestHeaders) {
+    try {
       for (let k in requestHeaders) {
         if (k.toLowerCase() === 'content-type') {
           contentType = requestHeaders[k];
           break;
         }
       }
-    }
-    
-    // Serialize the body
-    const bodyInfo = await serializeRequestBody(rawBody, contentType);
+    } catch (e) {}
+
+    // If rawBody is a string (from Request.clone().text()) keep as-is, else pass through serializer
+    const bodyInfo = typeof rawBody === 'string' ? await serializeRequestBody(rawBody, contentType) : await serializeRequestBody(rawBody, contentType);
     const maskedBody = maskSensitiveData(bodyInfo.payloadText);
-    
-    const baseData = { 
-      time, 
-      method, 
-      url, 
-      requestHeaders: maskHeaders(requestHeaders), 
+
+    const baseData = {
+      time,
+      method,
+      url,
+      requestHeaders: maskHeaders(requestHeaders),
       requestBody: maskedBody,
       payloadText: maskedBody,
       parsedPayload: bodyInfo.parsedPayload,
       payloadType: bodyInfo.payloadType,
-      status: 'PENDING', 
-      type: 'fetch' 
+      status: 'PENDING',
+      type: 'fetch'
     };
     sendLog('NETWORK', baseData);
 
@@ -352,33 +387,31 @@
       const response = await originalFetch.apply(this, args);
       const clonedResponse = response.clone();
       const duration = Math.round(performance.now() - startTime);
-      
+
       let responseBody = '';
       try {
         responseBody = await clonedResponse.text();
-        if (responseBody.length > 50000) responseBody = responseBody.substring(0, 50000) + '... (TRUNCATED)';
-        console.log('[BERIBUG] Captured fetch response, status:', response.status, 'length:', responseBody.length);
+        if (responseBody && responseBody.length > 50000) responseBody = responseBody.substring(0, 50000) + '... (TRUNCATED)';
+        console.log('[BERIBUG] Captured fetch response, status:', response.status, 'length:', responseBody ? responseBody.length : 0);
       } catch (e) {
         console.warn('[BERIBUG] Failed to capture fetch response:', e.message);
       }
 
       const responseHeaders = {};
-      clonedResponse.headers.forEach((v, k) => {
-        responseHeaders[k] = v;
-      });
+      try { clonedResponse.headers.forEach((v, k) => { responseHeaders[k] = v; }); } catch (e) {}
 
-      sendLog('NETWORK', { 
-        ...baseData, 
-        time: new Date().toISOString(), 
+      sendLog('NETWORK', {
+        ...baseData,
+        time: new Date().toISOString(),
         status: response.status,
         responseHeaders: maskHeaders(responseHeaders),
         responseBody: responseBody,
-        size: responseBody.length,
+        size: responseBody ? responseBody.length : 0,
         duration: duration
       });
       return response;
     } catch (err) {
-      console.error('[BERIBUG] Fetch error:', err.message);
+      console.error('[BERIBUG] Fetch error:', err && err.message);
       sendLog('NETWORK', { ...baseData, time: new Date().toISOString(), status: 'ERROR', duration: Math.round(performance.now() - startTime) });
       throw err;
     }

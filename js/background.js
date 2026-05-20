@@ -4,6 +4,10 @@ let isPaused = false;
 let cachedCountry = "Unknown";
 let headerCache = new Map(); // Store headers by URL during recording
 let pendingRequests = new Map(); // requestId -> data (for advanced tracking)
+// CDP state
+let cdpAttachedTabs = new Map(); // tabId -> true
+let cdpRequests = new Map(); // cdpRequestId -> { mapped data }
+let cdpListenerAdded = false;
 
 // Detect country on startup
 async function updateCountryCache() {
@@ -378,6 +382,165 @@ async function setupOffscreenDocument(path) {
     justification: "Recording screen for T.R.A.C.E report",
   });
 }
+
+// ---------------- CDP / chrome.debugger Integration ----------------
+async function attachCDPToTab(tabId) {
+  if (!chrome.debugger) {
+    console.warn('[BERIBUG][CDP] chrome.debugger not available');
+    return;
+  }
+  if (cdpAttachedTabs.has(tabId)) return;
+
+  const debuggee = { tabId: Number(tabId) };
+  return new Promise((resolve, reject) => {
+    chrome.debugger.attach(debuggee, '1.3', async () => {
+      const err = chrome.runtime.lastError;
+      if (err) {
+        console.error('[BERIBUG][CDP] attach error', err.message);
+        return reject(err);
+      }
+      console.log('[BERIBUG][CDP] attached to tab', tabId);
+      cdpAttachedTabs.set(tabId, true);
+
+      // Enable Network domain
+      chrome.debugger.sendCommand(debuggee, 'Network.enable', {}, (res) => {
+        if (chrome.runtime.lastError) console.warn('[BERIBUG][CDP] Network.enable failed', chrome.runtime.lastError.message);
+        else console.log('[BERIBUG][CDP] Network enabled');
+      });
+
+      // Set up event listener once
+      // Note: listener is global; filter by tabId using debuggee
+      if (!cdpListenerAdded) {
+        chrome.debugger.onEvent.addListener(handleCdpEvent);
+        cdpListenerAdded = true;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function handleCdpEvent(debuggeeId, method, params) {
+  try {
+    if (!debuggeeId || !debuggeeId.tabId) return;
+    const tabId = debuggeeId.tabId;
+    if (!cdpAttachedTabs.has(tabId)) return;
+
+    // Interested events: Network.requestWillBeSent, Network.responseReceived, Network.loadingFinished, Network.loadingFailed
+    if (method === 'Network.requestWillBeSent') {
+      const r = params;
+      const requestId = r.requestId;
+      const entry = {
+        requestId,
+        url: r.request.url,
+        method: r.request.method,
+        headers: r.request.headers || {},
+        timestamp: r.timestamp,
+        initiator: r.initiator || {},
+        frameId: r.frameId,
+        type: r.type || 'other',
+      };
+      cdpRequests.set(requestId, entry);
+      console.log('[BERIBUG][CDP] requestWillBeSent', requestId, entry.url);
+
+      // Try to fetch request post data
+      chrome.debugger.sendCommand({ tabId }, 'Network.getRequestPostData', { requestId }, (resp) => {
+        if (chrome.runtime.lastError) {
+          console.warn('[BERIBUG][CDP] getRequestPostData failed', requestId, chrome.runtime.lastError.message);
+          entry.requestPostData = null;
+        } else {
+          entry.requestPostData = resp && (resp.postData || resp.binaryData) ? (resp.postData || resp.binaryData) : null;
+          console.log('[BERIBUG][CDP] request body for', requestId, !!entry.requestPostData);
+        }
+      });
+
+      // Emit a provisional network log (so UI shows entry early)
+      if (isRecording) {
+        appendLog('NETWORK', {
+          requestId: requestId,
+          method: entry.method,
+          url: entry.url,
+          status: 'PENDING',
+          type: entry.type,
+          requestHeaders: maskHeaders(entry.headers),
+          isMonkeyPatched: false,
+          startTimeAbs: Date.now(),
+        });
+      }
+    } else if (method === 'Network.responseReceived') {
+      const r = params;
+      const requestId = r.requestId;
+      const existing = cdpRequests.get(requestId) || {};
+      existing.response = {
+        status: r.response.status,
+        headers: r.response.headers,
+        mimeType: r.response.mimeType,
+        encoded: r.response.encodedDataLength,
+      };
+      cdpRequests.set(requestId, existing);
+      console.log('[BERIBUG][CDP] responseReceived', requestId, existing.response.status);
+    } else if (method === 'Network.loadingFinished') {
+      const r = params;
+      const requestId = r.requestId;
+      const existing = cdpRequests.get(requestId) || {};
+      // Try to get response body
+      chrome.debugger.sendCommand({ tabId }, 'Network.getResponseBody', { requestId }, (resp) => {
+        if (chrome.runtime.lastError) {
+          console.warn('[BERIBUG][CDP] getResponseBody failed', requestId, chrome.runtime.lastError.message);
+        } else {
+          existing.responseBody = resp && (resp.body || resp.base64Encoded ? resp.body : null);
+          existing.responseBodyIsBase64 = resp && resp.base64Encoded;
+          console.log('[BERIBUG][CDP] response body for', requestId, existing.responseBody ? true : false);
+        }
+
+        // Finalize and append to logs
+        if (isRecording) {
+          appendLog('NETWORK', {
+            requestId: requestId,
+            method: existing.method || 'GET',
+            url: existing.url || '(unknown)',
+            status: existing.response ? existing.response.status : 200,
+            type: existing.type || 'other',
+            size: existing.response ? existing.response.encoded : 0,
+            duration: Math.round((Date.now() - (recordingStartTime || Date.now()))),
+            requestHeaders: maskHeaders(existing.headers || {}),
+            responseHeaders: maskHeaders((existing.response && existing.response.headers) || {}),
+            responseBody: existing.responseBody || null,
+            payloadText: existing.requestPostData || null,
+            isStatic: false,
+            fromCDP: true,
+            startTimeAbs: Date.now(),
+          });
+        }
+
+        // Cleanup request mapping to avoid memory growth
+        cdpRequests.delete(requestId);
+      });
+    } else if (method === 'Network.loadingFailed') {
+      const r = params;
+      const requestId = r.requestId;
+      console.warn('[BERIBUG][CDP] loadingFailed', requestId, r.errorText);
+      const existing = cdpRequests.get(requestId) || {};
+      if (isRecording) {
+        appendLog('NETWORK', {
+          requestId: requestId,
+          method: existing.method || 'GET',
+          url: existing.url || '(unknown)',
+          status: 0,
+          type: existing.type || 'other',
+          message: r.errorText,
+          startTimeAbs: Date.now(),
+          duration: 0,
+          fromCDP: true,
+        });
+      }
+      cdpRequests.delete(requestId);
+    }
+  } catch (e) {
+    console.error('[BERIBUG][CDP] handle event error', e && e.message);
+  }
+}
+
 
 // Global accessor for review page to fetch
 let pendingVideoBase64 = null;
@@ -1160,6 +1323,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 function (tabs) {
                   const targetTab = tabs[0];
                   if (targetTab) {
+                    // Attach CDP to active tab for robust network capture
+                    try {
+                      attachCDPToTab(targetTab.id).catch((e) =>
+                        console.warn('[BERIBUG][CDP] attach failed', e),
+                      );
+                    } catch (e) {}
                     chrome.tabs
                       .sendMessage(targetTab.id, {
                         action: "SHOW_WIDGET",
@@ -1206,6 +1375,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     recordingStartTime = null;
     isPaused = false;
     headerCache.clear();
+    // Detach any CDP attached tabs
+    for (const [tabId] of cdpAttachedTabs) {
+      try {
+        chrome.debugger.detach({ tabId: Number(tabId) }, () => {});
+      } catch (e) {}
+    }
+    cdpAttachedTabs.clear();
+    cdpRequests.clear();
+    try {
+      if (cdpListenerAdded) {
+        chrome.debugger.onEvent.removeListener(handleCdpEvent);
+        cdpListenerAdded = false;
+      }
+    } catch (e) {}
     chrome.runtime.sendMessage({
       target: "offscreen",
       action: "stopRecording",

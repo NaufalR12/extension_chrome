@@ -12,6 +12,7 @@
     "scripting",
     "alarms",
     "offscreen",
+    "debugger",
     "cookies",
     "webRequest",
     "webRequestExtraHeaders",
