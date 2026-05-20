@@ -40,6 +40,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let cropRect = null; // {x, y, w, h}
   let magnifier = null; // {time, x, y, size}
   let currentCutStart = null;
+  let cropPreview = null; // live crop selection while dragging
 
   // Settings / selection / drag
   let defaultActiveEditDurationSec = 5;
@@ -243,6 +244,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // 4. Draw selection overlay (Select tool only)
     drawSelectionOverlay(now);
+
+    // 5. Draw crop preview while selecting
+    drawCropPreview();
   }
 
   function drawSelectionOverlay(now) {
@@ -290,6 +294,43 @@ document.addEventListener("DOMContentLoaded", () => {
       ctx.restore();
       return;
     }
+
+    ctx.restore();
+  }
+
+  function drawCropPreview() {
+    if (activeTool !== "crop" || !cropPreview) return;
+
+    const box = normalizeRect({
+      x: cropPreview.x,
+      y: cropPreview.y,
+      w: cropPreview.w,
+      h: cropPreview.h,
+    });
+
+    ctx.save();
+
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 5]);
+    ctx.strokeRect(box.x, box.y, box.w, box.h);
+
+    ctx.setLineDash([]);
+    ctx.strokeStyle = "rgba(26, 115, 232, 0.95)";
+    ctx.fillStyle = "rgba(26, 115, 232, 0.95)";
+    const handleSize = 8;
+    const half = handleSize / 2;
+    [
+      { x: box.x, y: box.y },
+      { x: box.x + box.w, y: box.y },
+      { x: box.x, y: box.y + box.h },
+      { x: box.x + box.w, y: box.y + box.h },
+    ].forEach((p) => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, half, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
 
     ctx.restore();
   }
@@ -625,7 +666,13 @@ document.addEventListener("DOMContentLoaded", () => {
     } else {
       currentAnnotation.w = curX - startX;
       currentAnnotation.h = curY - startY;
+      if (currentAnnotation.type === "crop") {
+        cropPreview = currentAnnotation;
+      }
     }
+
+    interactionLayer.style.setProperty("--crop-x", `${e.offsetX}px`);
+    interactionLayer.style.setProperty("--crop-y", `${e.offsetY}px`);
 
     if (!isPlaying) drawFrame();
   });
@@ -641,17 +688,19 @@ document.addEventListener("DOMContentLoaded", () => {
     isDragging = false;
 
     if (activeTool === "crop") {
+      const source = cropPreview || currentAnnotation;
       cropRect = ensureEditId(
         {
-          x: Math.min(startX, startX + currentAnnotation.w),
-          y: Math.min(startY, startY + currentAnnotation.h),
-          w: Math.abs(currentAnnotation.w),
-          h: Math.abs(currentAnnotation.h),
+          x: Math.min(source.x, source.x + source.w),
+          y: Math.min(source.y, source.y + source.h),
+          w: Math.abs(source.w),
+          h: Math.abs(source.h),
         },
         "crop",
       );
       selectEdit(cropRect._id);
       renderEditsUI();
+      cropPreview = null;
     } else if (currentAnnotation) {
       annotations.push(currentAnnotation);
       renderEditsUI();
@@ -674,6 +723,14 @@ document.addEventListener("DOMContentLoaded", () => {
         : "none";
       document.getElementById("propBlur").style.display =
         activeTool === "blur" ? "block" : "none";
+
+      if (activeTool !== "crop") {
+        cropPreview = null;
+        interactionLayer.style.removeProperty("--crop-x");
+        interactionLayer.style.removeProperty("--crop-y");
+      }
+
+      interactionLayer.classList.toggle("crop-active", activeTool === "crop");
     });
   });
 
