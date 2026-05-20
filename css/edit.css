@@ -55,6 +55,11 @@ body, html {
   gap: 12px;
 }
 
+.header-actions .btn-text[disabled] {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
 .btn-text {
   background: transparent;
   border: none;
@@ -133,6 +138,29 @@ body, html {
   font-size: 11px;
   padding: 4px;
   cursor: pointer;
+}
+
+.custom-aspect {
+  margin-top: 8px;
+}
+
+.custom-aspect-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.custom-aspect-row input {
+  width: 72px;
+  background: var(--bg-lighter);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.custom-aspect-row span {
+  color: var(--text-dim);
 }
 
 /* Stage (Center) */

@@ -14,14 +14,22 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnPlayPause = document.getElementById("btnPlayPause");
   const btnBack5 = document.getElementById("btnBack5");
   const btnFwd5 = document.getElementById("btnFwd5");
+  const btnUndo = document.getElementById("btnUndo");
+  const btnRedo = document.getElementById("btnRedo");
   const currentTimeDisplay = document.getElementById("currentTime");
   const durationDisplay = document.getElementById("duration");
   const playbackSpeed = document.getElementById("playbackSpeed");
   const activeEditDurationInput = document.getElementById("activeEditDuration");
+  const aspectRatioPresetInput = document.getElementById("aspectRatioPreset");
+  const customAspectWrap = document.getElementById("customAspectWrap");
+  const customAspectWidthInput = document.getElementById("customAspectWidth");
+  const customAspectHeightInput = document.getElementById("customAspectHeight");
   const editListContainer = document.getElementById("editList");
   const renderOverlay = document.getElementById("renderOverlay");
   const renderProgress = document.getElementById("renderProgress");
   const renderStatus = document.getElementById("renderStatus");
+  const exportCanvas = document.createElement("canvas");
+  const exportCtx = exportCanvas.getContext("2d");
 
   // State
   let sessionLogs = {
@@ -41,6 +49,12 @@ document.addEventListener("DOMContentLoaded", () => {
   let magnifier = null; // {time, x, y, size}
   let currentCutStart = null;
   let cropPreview = null; // live crop selection while dragging
+  let outputAspectPreset = "original";
+  let customAspectWidth = 16;
+  let customAspectHeight = 9;
+  let historyStack = [];
+  let historyIndex = -1;
+  const HISTORY_LIMIT = 60;
 
   // Settings / selection / drag
   let defaultActiveEditDurationSec = 5;
@@ -112,9 +126,11 @@ document.addEventListener("DOMContentLoaded", () => {
       const setupVideo = () => {
         canvas.width = sourceVideo.videoWidth;
         canvas.height = sourceVideo.videoHeight;
+        syncExportCanvasSize();
         durationDisplay.textContent = formatTime(sourceVideo.duration);
         sourceVideo.playbackRate = parseFloat(playbackSpeed.value || "1");
         renderEditsUI();
+        resetHistory();
         requestAnimationFrame(renderLoop);
       };
 
@@ -247,6 +263,71 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // 5. Draw crop preview while selecting
     drawCropPreview();
+
+    renderExportFrame();
+  }
+
+  function renderExportFrame() {
+    if (!exportCtx || !exportCanvas.width || !exportCanvas.height) return;
+
+    exportCtx.setTransform(1, 0, 0, 1, 0, 0);
+    exportCtx.clearRect(0, 0, exportCanvas.width, exportCanvas.height);
+    exportCtx.fillStyle = "#000";
+    exportCtx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+
+    if (!canvas.width || !canvas.height) return;
+
+    const scale = Math.min(
+      exportCanvas.width / canvas.width,
+      exportCanvas.height / canvas.height,
+    );
+    const drawWidth = canvas.width * scale;
+    const drawHeight = canvas.height * scale;
+    const drawX = (exportCanvas.width - drawWidth) / 2;
+    const drawY = (exportCanvas.height - drawHeight) / 2;
+
+    exportCtx.imageSmoothingEnabled = true;
+    exportCtx.imageSmoothingQuality = "high";
+    exportCtx.drawImage(canvas, drawX, drawY, drawWidth, drawHeight);
+  }
+
+  function getAspectRatioValue() {
+    if (outputAspectPreset === "original") return null;
+    if (outputAspectPreset === "custom") {
+      const w = parseFloat(customAspectWidthInput?.value || customAspectWidth || 1) || 1;
+      const h = parseFloat(customAspectHeightInput?.value || customAspectHeight || 1) || 1;
+      return Math.max(0.01, w / h);
+    }
+    const parts = outputAspectPreset.split(":").map((n) => parseFloat(n));
+    if (parts.length !== 2 || !isFinite(parts[0]) || !isFinite(parts[1]) || parts[1] === 0) {
+      return null;
+    }
+    return parts[0] / parts[1];
+  }
+
+  function syncExportCanvasSize() {
+    if (!sourceVideo.videoWidth || !sourceVideo.videoHeight) return;
+
+    const sourceW = sourceVideo.videoWidth;
+    const sourceH = sourceVideo.videoHeight;
+    const targetRatio = getAspectRatioValue();
+
+    let exportW = sourceW;
+    let exportH = sourceH;
+
+    if (targetRatio) {
+      const sourceRatio = sourceW / sourceH;
+      if (sourceRatio >= targetRatio) {
+        exportW = sourceW;
+        exportH = Math.max(1, Math.round(exportW / targetRatio));
+      } else {
+        exportH = sourceH;
+        exportW = Math.max(1, Math.round(exportH * targetRatio));
+      }
+    }
+
+    exportCanvas.width = exportW;
+    exportCanvas.height = exportH;
   }
 
   function drawSelectionOverlay(now) {
@@ -682,6 +763,7 @@ document.addEventListener("DOMContentLoaded", () => {
       isTransforming = false;
       transformState = null;
       if (!isPlaying) drawFrame();
+      commitHistory();
       return;
     }
     if (!isDragging) return;
@@ -700,15 +782,20 @@ document.addEventListener("DOMContentLoaded", () => {
       );
       selectEdit(cropRect._id);
       renderEditsUI();
+      commitHistory();
       cropPreview = null;
     } else if (currentAnnotation) {
       annotations.push(currentAnnotation);
       renderEditsUI();
+      commitHistory();
     }
     currentAnnotation = null;
   });
 
   // --- UI HANDLERS ---
+  btnUndo?.addEventListener("click", () => undoHistory());
+  btnRedo?.addEventListener("click", () => redoHistory());
+
   document.querySelectorAll(".tool-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       document
@@ -732,6 +819,26 @@ document.addEventListener("DOMContentLoaded", () => {
 
       interactionLayer.classList.toggle("crop-active", activeTool === "crop");
     });
+  });
+
+  document.addEventListener("keydown", (e) => {
+    const target = e.target;
+    const isTextInput =
+      target &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+
+    if (!e.ctrlKey && !e.metaKey) return;
+    if (isTextInput) return;
+
+    const key = e.key.toLowerCase();
+    if (key === "z") {
+      e.preventDefault();
+      if (e.shiftKey) redoHistory();
+      else undoHistory();
+    } else if (key === "y") {
+      e.preventDefault();
+      redoHistory();
+    }
   });
 
   btnPlayPause.addEventListener("click", () => {
@@ -815,6 +922,7 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("btnMarkCut").classList.remove("active");
       selectEdit(newCut._id);
       renderEditsUI();
+      commitHistory();
     }
   });
 
@@ -823,6 +931,7 @@ document.addEventListener("DOMContentLoaded", () => {
     removeEditById(selectedEditId);
     selectedEditId = null;
     renderEditsUI();
+    commitHistory();
   });
 
   // --- RENDERING ENGINE ---
@@ -832,7 +941,8 @@ document.addEventListener("DOMContentLoaded", () => {
     sourceVideo.pause();
 
     const finalCuts = mergeOverlappingCuts(cuts);
-    const stream = canvas.captureStream(30);
+    renderExportFrame();
+    const stream = exportCanvas.captureStream(30);
     const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
     const chunks = [];
 
@@ -1063,6 +1173,106 @@ document.addEventListener("DOMContentLoaded", () => {
     return match ? parseInt(match[1]) * 60 + parseInt(match[2]) : 0;
   }
 
+  function cloneValue(value) {
+    if (value == null) return value;
+    if (typeof structuredClone === "function") {
+      return structuredClone(value);
+    }
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function captureEditorState() {
+    return {
+      cuts: cloneValue(cuts),
+      annotations: cloneValue(annotations),
+      cropRect: cloneValue(cropRect),
+      magnifier: cloneValue(magnifier),
+      currentCutStart,
+      selectedEditId,
+      nextEditId,
+      outputAspectPreset,
+      customAspectWidth,
+      customAspectHeight,
+    };
+  }
+
+  function applyEditorState(snapshot) {
+    if (!snapshot) return;
+    cuts = cloneValue(snapshot.cuts || []);
+    annotations = cloneValue(snapshot.annotations || []);
+    cropRect = cloneValue(snapshot.cropRect || null);
+    magnifier = cloneValue(snapshot.magnifier || null);
+    currentCutStart = snapshot.currentCutStart ?? null;
+    selectedEditId = snapshot.selectedEditId ?? null;
+    nextEditId = snapshot.nextEditId ?? 1;
+    outputAspectPreset = snapshot.outputAspectPreset || "original";
+    customAspectWidth = snapshot.customAspectWidth ?? 16;
+    customAspectHeight = snapshot.customAspectHeight ?? 9;
+
+    if (aspectRatioPresetInput) aspectRatioPresetInput.value = outputAspectPreset;
+    if (customAspectWidthInput) customAspectWidthInput.value = String(customAspectWidth);
+    if (customAspectHeightInput) customAspectHeightInput.value = String(customAspectHeight);
+    updateAspectControls();
+    syncExportCanvasSize();
+    cropPreview = null;
+    isDragging = false;
+    isTransforming = false;
+    transformState = null;
+    draggingEditZone = null;
+    renderEditsUI();
+    updateUndoRedoButtons();
+    drawFrame();
+    renderExportFrame();
+  }
+
+  function resetHistory() {
+    historyStack = [captureEditorState()];
+    historyIndex = 0;
+    updateUndoRedoButtons();
+  }
+
+  function commitHistory() {
+    const snapshot = captureEditorState();
+    const current = historyStack[historyIndex];
+    if (current && JSON.stringify(current) === JSON.stringify(snapshot)) return;
+
+    historyStack = historyStack.slice(0, historyIndex + 1);
+    historyStack.push(snapshot);
+    if (historyStack.length > HISTORY_LIMIT) {
+      historyStack.shift();
+    }
+    historyIndex = historyStack.length - 1;
+    updateUndoRedoButtons();
+  }
+
+  function undoHistory() {
+    if (historyIndex <= 0) return;
+    historyIndex -= 1;
+    applyEditorState(historyStack[historyIndex]);
+  }
+
+  function redoHistory() {
+    if (historyIndex >= historyStack.length - 1) return;
+    historyIndex += 1;
+    applyEditorState(historyStack[historyIndex]);
+  }
+
+  function updateUndoRedoButtons() {
+    if (btnUndo) btnUndo.disabled = historyIndex <= 0;
+    if (btnRedo) btnRedo.disabled = historyIndex >= historyStack.length - 1;
+  }
+
+  function updateAspectControls() {
+    if (customAspectWrap) {
+      customAspectWrap.classList.toggle("hidden", outputAspectPreset !== "custom");
+    }
+    if (aspectRatioPresetInput) {
+      aspectRatioPresetInput.value = outputAspectPreset;
+    }
+    if (customAspectWidthInput) customAspectWidthInput.value = String(customAspectWidth);
+    if (customAspectHeightInput) customAspectHeightInput.value = String(customAspectHeight);
+  }
+
   document.getElementById("btnCancel").addEventListener("click", () => {
     if (confirm("Discard changes?")) window.location.href = "review.html";
   });
@@ -1088,6 +1298,11 @@ document.addEventListener("DOMContentLoaded", () => {
     defaultActiveEditDurationSec = isFinite(saved) && saved > 0 ? saved : 5;
     if (activeEditDurationInput)
       activeEditDurationInput.value = String(defaultActiveEditDurationSec);
+
+    outputAspectPreset = localStorage.getItem("beribug_outputAspectPreset") || "original";
+    customAspectWidth = parseFloat(localStorage.getItem("beribug_customAspectWidth") || "16") || 16;
+    customAspectHeight = parseFloat(localStorage.getItem("beribug_customAspectHeight") || "9") || 9;
+    updateAspectControls();
   }
 
   activeEditDurationInput?.addEventListener("change", () => {
@@ -1097,6 +1312,37 @@ document.addEventListener("DOMContentLoaded", () => {
       "beribug_defaultActiveEditDurationSec",
       String(defaultActiveEditDurationSec),
     );
+  });
+
+  aspectRatioPresetInput?.addEventListener("change", () => {
+    outputAspectPreset = aspectRatioPresetInput.value || "original";
+    localStorage.setItem("beribug_outputAspectPreset", outputAspectPreset);
+    updateAspectControls();
+    syncExportCanvasSize();
+    renderExportFrame();
+    commitHistory();
+  });
+
+  customAspectWidthInput?.addEventListener("change", () => {
+    const val = parseFloat(customAspectWidthInput.value || "16");
+    customAspectWidth = isFinite(val) && val > 0 ? val : 16;
+    localStorage.setItem("beribug_customAspectWidth", String(customAspectWidth));
+    if (outputAspectPreset === "custom") {
+      syncExportCanvasSize();
+      renderExportFrame();
+      commitHistory();
+    }
+  });
+
+  customAspectHeightInput?.addEventListener("change", () => {
+    const val = parseFloat(customAspectHeightInput.value || "9");
+    customAspectHeight = isFinite(val) && val > 0 ? val : 9;
+    localStorage.setItem("beribug_customAspectHeight", String(customAspectHeight));
+    if (outputAspectPreset === "custom") {
+      syncExportCanvasSize();
+      renderExportFrame();
+      commitHistory();
+    }
   });
 
   // --- ACTIVE EDITS UI (List + Timeline Zones) ---
@@ -1239,6 +1485,7 @@ document.addEventListener("DOMContentLoaded", () => {
           }
           renderEditList();
           renderTimelineEdits();
+          commitHistory();
         });
       }
 
@@ -1247,6 +1494,7 @@ document.addEventListener("DOMContentLoaded", () => {
         removeEditById(data._id);
         if (selectedEditId === data._id) selectedEditId = null;
         renderEditsUI();
+        commitHistory();
       });
 
       editListContainer.appendChild(item);
@@ -1364,6 +1612,7 @@ document.addEventListener("DOMContentLoaded", () => {
       document.removeEventListener("mouseup", onUp);
       renderEditList();
       renderTimelineEdits();
+      commitHistory();
     };
 
     document.addEventListener("mousemove", onMove);
