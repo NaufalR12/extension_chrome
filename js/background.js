@@ -67,6 +67,29 @@ function determineResourceType(url, initiator, type) {
   return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
+// Map CDP network type to resource type (mirrors DevTools)
+function mapCdpTypeToResourceType(cdpType) {
+  const t = (cdpType || 'other').toLowerCase();
+  if (t === 'fetch' || t === 'xmlhttprequest') return 'Fetch/XHR';
+  if (t === 'script') return 'JS';
+  if (t === 'stylesheet') return 'CSS';
+  if (t === 'image') return 'Img';
+  if (t === 'font') return 'Font';
+  if (t === 'media') return 'Media';
+  if (t === 'document') return 'Doc';
+  if (t === 'websocket') return 'WS';
+  if (t === 'manifest') return 'Manifest';
+  if (t === 'ping' || t === 'beacon' || t === 'csp-violation-report') return 'Ping';
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+// Check if resource type is static (excludes XHR, fetch, ws, ping)
+function isStaticResourceType(type) {
+  const t = String(type || '').toLowerCase();
+  return !['fetch/xhr', 'ws', 'websocket', 'ping', 'beacon'].includes(t);
+}
+
+
 // webRequest Listeners (Advanced Tracker)
 chrome.webRequest.onBeforeRequest.addListener(
   (details) => {
@@ -321,11 +344,16 @@ async function performAppendLog(type, payload) {
           Math.abs(n.relativeMs - payload.relativeMs) < 2000,
       );
       if (existing) {
-        existing.requestBody = payload.requestBody;
-        existing.payloadText = payload.payloadText;
-        existing.parsedPayload = payload.parsedPayload;
-        existing.payloadType = payload.payloadType;
-        existing.responseBody = payload.responseBody;
+        if (payload.requestBody)
+          existing.requestBody = payload.requestBody;
+        if (payload.payloadText)
+          existing.payloadText = payload.payloadText;
+        if (payload.parsedPayload)
+          existing.parsedPayload = payload.parsedPayload;
+        if (payload.payloadType)
+          existing.payloadType = payload.payloadType;
+        if (payload.responseBody)
+          existing.responseBody = payload.responseBody;
         if (payload.requestHeaders)
           existing.requestHeaders = {
             ...existing.requestHeaders,
@@ -439,33 +467,55 @@ function handleCdpEvent(debuggeeId, method, params) {
         initiator: r.initiator || {},
         frameId: r.frameId,
         type: r.type || 'other',
+        requestPostData: null, // Will be filled async
       };
       cdpRequests.set(requestId, entry);
-      console.log('[BERIBUG][CDP] requestWillBeSent', requestId, entry.url);
+      console.log(`[CDP REQUEST] requestId=${requestId} url=${entry.url} method=${entry.method}`);
 
-      // Try to fetch request post data
+      // Try to fetch request post data IMMEDIATELY (store in map)
       chrome.debugger.sendCommand({ tabId }, 'Network.getRequestPostData', { requestId }, (resp) => {
         if (chrome.runtime.lastError) {
-          console.warn('[BERIBUG][CDP] getRequestPostData failed', requestId, chrome.runtime.lastError.message);
-          entry.requestPostData = null;
+          console.warn('[CDP] getRequestPostData failed', requestId, chrome.runtime.lastError.message);
         } else {
-          entry.requestPostData = resp && (resp.postData || resp.binaryData) ? (resp.postData || resp.binaryData) : null;
-          console.log('[BERIBUG][CDP] request body for', requestId, !!entry.requestPostData);
+          const postData = resp && (resp.postData || resp.binaryData) ? (resp.postData || resp.binaryData) : null;
+          if (cdpRequests.has(requestId)) {
+            const mapEntry = cdpRequests.get(requestId);
+            mapEntry.requestPostData = postData;
+            console.log(`[CDP REQUEST] requestId=${requestId} hasPostData=${!!postData} postDataLength=${postData ? postData.length : 0}`);
+            
+            // Update existing log entry in storage if it exists
+            if (isRecording && mapEntry.logId) {
+              chrome.storage.local.get(['sessionLogs'], (data) => {
+                const logs = data.sessionLogs || { network: [] };
+                const logIdx = logs.network.findIndex(n => n.requestId === requestId);
+                if (logIdx >= 0) {
+                  logs.network[logIdx].payloadText = postData;
+                  logs.network[logIdx].requestBody = postData;
+                  chrome.storage.local.set({ sessionLogs: logs });
+                }
+              });
+            }
+          }
         }
       });
 
-      // Emit a provisional network log (so UI shows entry early)
+      // Append provisional entry to logs IMMEDIATELY (so UI shows request early with whatever payload we have)
       if (isRecording) {
-        appendLog('NETWORK', {
+        const logEntry = {
           requestId: requestId,
           method: entry.method,
           url: entry.url,
           status: 'PENDING',
-          type: entry.type,
+          type: mapCdpTypeToResourceType(entry.type),
           requestHeaders: maskHeaders(entry.headers),
+          payloadText: null, // Will be updated when available
           isMonkeyPatched: false,
+          fromCDP: true,
           startTimeAbs: Date.now(),
-        });
+        };
+        appendLog('NETWORK', logEntry);
+        // Mark in cdpRequests that we appended this entry
+        entry.logId = true;
       }
     } else if (method === 'Network.responseReceived') {
       const r = params;
@@ -478,39 +528,54 @@ function handleCdpEvent(debuggeeId, method, params) {
         encoded: r.response.encodedDataLength,
       };
       cdpRequests.set(requestId, existing);
-      console.log('[BERIBUG][CDP] responseReceived', requestId, existing.response.status);
+      console.log(`[CDP RESPONSE] requestId=${requestId} status=${existing.response.status}`);
+
+      // Update existing log entry status
+      if (isRecording) {
+        chrome.storage.local.get(['sessionLogs'], (data) => {
+          const logs = data.sessionLogs || { network: [] };
+          const logIdx = logs.network.findIndex(n => n.requestId === requestId);
+          if (logIdx >= 0) {
+            logs.network[logIdx].status = existing.response.status;
+            logs.network[logIdx].responseHeaders = maskHeaders(existing.response.headers);
+            logs.network[logIdx].mimeType = existing.response.mimeType;
+            logs.network[logIdx].size = existing.response.encoded;
+            chrome.storage.local.set({ sessionLogs: logs });
+          }
+        });
+      }
     } else if (method === 'Network.loadingFinished') {
       const r = params;
       const requestId = r.requestId;
       const existing = cdpRequests.get(requestId) || {};
+      
+      console.log(`[CDP FINISH] requestId=${requestId} encodedDataLength=${r.encodedDataLength}`);
+
       // Try to get response body
       chrome.debugger.sendCommand({ tabId }, 'Network.getResponseBody', { requestId }, (resp) => {
         if (chrome.runtime.lastError) {
-          console.warn('[BERIBUG][CDP] getResponseBody failed', requestId, chrome.runtime.lastError.message);
+          console.warn('[CDP] getResponseBody failed', requestId, chrome.runtime.lastError.message);
         } else {
-          existing.responseBody = resp && (resp.body || resp.base64Encoded ? resp.body : null);
-          existing.responseBodyIsBase64 = resp && resp.base64Encoded;
-          console.log('[BERIBUG][CDP] response body for', requestId, existing.responseBody ? true : false);
-        }
-
-        // Finalize and append to logs
-        if (isRecording) {
-          appendLog('NETWORK', {
-            requestId: requestId,
-            method: existing.method || 'GET',
-            url: existing.url || '(unknown)',
-            status: existing.response ? existing.response.status : 200,
-            type: existing.type || 'other',
-            size: existing.response ? existing.response.encoded : 0,
-            duration: Math.round((Date.now() - (recordingStartTime || Date.now()))),
-            requestHeaders: maskHeaders(existing.headers || {}),
-            responseHeaders: maskHeaders((existing.response && existing.response.headers) || {}),
-            responseBody: existing.responseBody || null,
-            payloadText: existing.requestPostData || null,
-            isStatic: false,
-            fromCDP: true,
-            startTimeAbs: Date.now(),
-          });
+          const responseBody =
+            resp && typeof resp.body !== 'undefined'
+              ? resp.body
+              : null;
+          console.log(`[CDP FINISH] requestId=${requestId} hasResponseBody=${!!responseBody}`);
+          
+          // Update existing log entry with response body
+          if (isRecording) {
+            chrome.storage.local.get(['sessionLogs'], (data) => {
+              const logs = data.sessionLogs || { network: [] };
+              const logIdx = logs.network.findIndex(n => n.requestId === requestId);
+              if (logIdx >= 0) {
+                logs.network[logIdx].responseBody = responseBody;
+                logs.network[logIdx].status = existing.response ? existing.response.status : 200;
+                logs.network[logIdx].isStatic = isStaticResourceType(logs.network[logIdx].type);
+                logs.network[logIdx].fromCache = r.encodedDataLength === 0;
+                chrome.storage.local.set({ sessionLogs: logs });
+              }
+            });
+          }
         }
 
         // Cleanup request mapping to avoid memory growth
@@ -519,25 +584,37 @@ function handleCdpEvent(debuggeeId, method, params) {
     } else if (method === 'Network.loadingFailed') {
       const r = params;
       const requestId = r.requestId;
-      console.warn('[BERIBUG][CDP] loadingFailed', requestId, r.errorText);
+      console.warn('[CDP] loadingFailed', requestId, r.errorText);
       const existing = cdpRequests.get(requestId) || {};
+      
+      // Update existing log entry or append if not exists
       if (isRecording) {
-        appendLog('NETWORK', {
-          requestId: requestId,
-          method: existing.method || 'GET',
-          url: existing.url || '(unknown)',
-          status: 0,
-          type: existing.type || 'other',
-          message: r.errorText,
-          startTimeAbs: Date.now(),
-          duration: 0,
-          fromCDP: true,
+        chrome.storage.local.get(['sessionLogs'], (data) => {
+          const logs = data.sessionLogs || { network: [] };
+          let logIdx = logs.network.findIndex(n => n.requestId === requestId);
+          if (logIdx >= 0) {
+            logs.network[logIdx].status = 0;
+            logs.network[logIdx].message = r.errorText;
+          } else {
+            // If we never appended this before, append now
+            appendLog('NETWORK', {
+              requestId: requestId,
+              method: existing.method || 'GET',
+              url: existing.url || '(unknown)',
+              status: 0,
+              type: existing.type || 'other',
+              message: r.errorText,
+              fromCDP: true,
+              startTimeAbs: Date.now(),
+            });
+          }
+          chrome.storage.local.set({ sessionLogs: logs });
         });
       }
       cdpRequests.delete(requestId);
     }
   } catch (e) {
-    console.error('[BERIBUG][CDP] handle event error', e && e.message);
+    console.error('[CDP] handle event error', e && e.message);
   }
 }
 
@@ -1317,18 +1394,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (response && response.status === "started") {
               recordingStartTime = Date.now(); // Set actual start time now
 
+              // Attach CDP to all active tabs for comprehensive network capture
+              chrome.tabs.query({}, (allTabs) => {
+                allTabs.forEach((tab) => {
+                  if (isInjectableUrl(tab.url)) {
+                    attachCDPToTab(tab.id).catch((e) =>
+                      console.warn('[BERIBUG][CDP] attach failed for tab', tab.id, e),
+                    );
+                  }
+                });
+              });
+
               // Show widget on the active tab
               chrome.tabs.query(
                 { active: true, lastFocusedWindow: true },
                 function (tabs) {
                   const targetTab = tabs[0];
                   if (targetTab) {
-                    // Attach CDP to active tab for robust network capture
-                    try {
-                      attachCDPToTab(targetTab.id).catch((e) =>
-                        console.warn('[BERIBUG][CDP] attach failed', e),
-                      );
-                    } catch (e) {}
                     chrome.tabs
                       .sendMessage(targetTab.id, {
                         action: "SHOW_WIDGET",
@@ -1638,10 +1720,30 @@ chrome.cookies.onChanged.addListener((changeInfo) => {
     .catch(() => {}); // Avoid error when no listeners
 });
 
+// Auto-attach CDP to newly created tabs during recording
+chrome.tabs.onCreated.addListener((tab) => {
+  if (isRecording && tab.id && isInjectableUrl(tab.url)) {
+    // Wait a bit for the tab to load before attaching
+    setTimeout(() => {
+      attachCDPToTab(tab.id).catch((e) =>
+        console.warn('[BERIBUG][CDP] auto-attach to new tab', tab.id, 'failed', e),
+      );
+    }, 500);
+  }
+});
+
 // Track navigations while recording, and restore floating widget when page changes
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (isRecording && changeInfo.status === "complete" && tab.url) {
     if (tab.url.startsWith("chrome-extension://")) return;
+
+    // Re-attach CDP if tab navigated away and came back
+    if (cdpAttachedTabs.has(tabId) && isInjectableUrl(tab.url)) {
+      console.log('[BERIBUG][CDP] tab navigated, re-attaching to', tabId);
+      attachCDPToTab(tabId).catch((e) =>
+        console.warn('[BERIBUG][CDP] reattach on navigation failed', e),
+      );
+    }
 
     appendLog("ACTIONS", {
       time: new Date().toLocaleTimeString(),

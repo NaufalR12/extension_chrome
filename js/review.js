@@ -773,138 +773,252 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    function renderPrettyPayload(req) {
-      const payloadType = String(req && req.payloadType ? req.payloadType : '').toLowerCase();
-      const parsedPayload = req ? req.parsedPayload : null;
-      const payloadText = req && req.payloadText ? String(req.payloadText) : (req && req.requestBody ? String(req.requestBody) : '');
-      
-      if (!payloadText && !parsedPayload) {
-        return '<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(No payload captured)</div>';
-      }
+        function renderPrettyPayload(req) {
+          const payloadType = String(req && req.payloadType ? req.payloadType : '').toLowerCase();
+          const parsedPayload = req ? req.parsedPayload : null;
+          const payloadText = req && req.payloadText ? String(req.payloadText) : (req && req.requestBody ? String(req.requestBody) : '');
+                    const ct =
+                      (req.responseHeaders &&
+                        (req.responseHeaders['content-type'] ||
+                         req.responseHeaders['Content-Type'])) ||
+                      (req.requestHeaders &&
+                        (req.requestHeaders['content-type'] ||
+                         req.requestHeaders['Content-Type'])) ||
+                      '';
+          // If no request body captured, but URL contains query params, show them like DevTools
+          if ((!payloadText || !String(payloadText).trim()) && !parsedPayload) {
+            try {
+              if (req && req.url && req.url.indexOf('?') !== -1) {
+                const u = new URL(req.url);
+                const entries = [...u.searchParams.entries()];
+                if (entries.length) return renderQueryParameters(entries, 'Query String Parameters');
+              }
+            } catch (e) {}
 
-      if (payloadType === 'binary') {
-        return '<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(Binary payload)</div>';
-      }
-
-      // GraphQL
-      if (payloadType === 'graphql' || (parsedPayload && typeof parsedPayload === 'object' && parsedPayload.query)) {
-        const query = escapeHtml(parsedPayload.query || '');
-        const variables = parsedPayload.variables ? escapeHtml(JSON.stringify(parsedPayload.variables, null, 2)) : '(No variables)';
-        const operation = parsedPayload.operationName ? escapeHtml(String(parsedPayload.operationName)) : '(None)';
-        return `
-          <div class="detail-section">
-            <div class="detail-section-header">GraphQL</div>
-            <div class="detail-item"><div class="detail-label">Operation</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;">${operation}</div></div>
-            <div class="detail-item"><div class="detail-label">Query</div><div class="detail-value"><pre style="margin:0;white-space:pre-wrap;background:#f8f9fa;padding:12px;border-radius:4px;font-size:11px;font-family:monospace;">${query}</pre></div></div>
-            <div class="detail-item"><div class="detail-label">Variables</div><div class="detail-value"><pre style="margin:0;white-space:pre-wrap;background:#f8f9fa;padding:12px;border-radius:4px;font-size:11px;font-family:monospace;">${variables}</pre></div></div>
-          </div>`;
-      }
-
-      // Form-Data
-      if (payloadType === 'multipart/form-data' && parsedPayload && typeof parsedPayload === 'object') {
-        return renderObjectAsTable(parsedPayload, 'Form Data');
-      }
-
-      // Try JSON
-      try {
-        if (payloadText) {
-          const parsed = JSON.parse(payloadText);
-          const pretty = JSON.stringify(parsed, null, 2);
-          return `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(pretty)}</pre>`;
-        }
-      } catch (e) {}
-
-      // Form-urlencoded
-      if (payloadType === 'application/x-www-form-urlencoded' || (payloadText && payloadText.includes('=') && payloadText.includes('&'))) {
-        try {
-          const params = new URLSearchParams(payloadText);
-          const entries = [];
-          for (let [k, v] of params) {
-            entries.push([k, v]);
+            return '<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(No payload captured)</div>';
           }
-          return renderKeyValueRows(entries, 'Form Parameters');
-        } catch (e) {}
-      }
 
-      // Default: raw text
-      return `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(payloadText)}</pre>`;
-    }
+          if (payloadType === 'binary') {
+            return '<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(Binary payload)</div>';
+          }
 
-    function renderObjectAsTable(obj, title) {
-      const rows = Object.entries(obj || {}).map(([key, value]) => {
-        const displayValue = Array.isArray(value) || (value && typeof value === 'object')
-          ? escapeHtml(JSON.stringify(value, null, 2))
-          : escapeHtml(String(value));
-        return `<div class="detail-item"><div class="detail-label">${escapeHtml(key)}</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;word-break:break-word;font-size:11px;">${displayValue}</div></div>`;
-      }).join('');
-      return `<div class="detail-section"><div class="detail-section-header">${escapeHtml(title)}</div>${rows}</div>`;
-    }
+          // GraphQL
+          if (payloadType === 'graphql' || (parsedPayload && typeof parsedPayload === 'object' && parsedPayload.query)) {
+            const query = escapeHtml(parsedPayload.query || '');
+            const variables = parsedPayload.variables ? escapeHtml(JSON.stringify(parsedPayload.variables, null, 2)) : '(No variables)';
+            const operation = parsedPayload.operationName ? escapeHtml(String(parsedPayload.operationName)) : '(None)';
+            return `
+              <div class="detail-section">
+                <div class="detail-section-header">GraphQL</div>
+                <div class="detail-item"><div class="detail-label">Operation</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;">${operation}</div></div>
+                <div class="detail-item"><div class="detail-label">Query</div><div class="detail-value"><pre style="margin:0;white-space:pre-wrap;background:#f8f9fa;padding:12px;border-radius:4px;font-size:11px;font-family:monospace;">${query}</pre></div></div>
+                <div class="detail-item"><div class="detail-label">Variables</div><div class="detail-value"><pre style="margin:0;white-space:pre-wrap;background:#f8f9fa;padding:12px;border-radius:4px;font-size:11px;font-family:monospace;">${variables}</pre></div></div>
+              </div>`;
+          }
 
-    function renderKeyValueRows(entries, title) {
-      const rows = entries.map(([key, value]) => 
-        `<div class="detail-item"><div class="detail-label">${escapeHtml(String(key))}</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;word-break:break-word;font-size:11px;">${escapeHtml(String(value))}</div></div>`
-      ).join('');
-      return `<div class="detail-section"><div class="detail-section-header">${escapeHtml(title)}</div>${rows}</div>`;
-    }
+          // Form-Data
+          if (payloadType === 'multipart/form-data' && parsedPayload && typeof parsedPayload === 'object') {
+            return renderObjectAsTable(parsedPayload, 'Form Data');
+          }
 
-    function escapeHtml(text) {
-      return String(text)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
+          // Try JSON
+          try {
+            if (payloadText) {
+              const parsed = JSON.parse(payloadText);
+              const pretty = JSON.stringify(parsed, null, 2);
+              return `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(pretty)}</pre>`;
+            }
+          } catch (e) {}
 
-    // Copy as cURL (bash) handler — attach to the specific button
-    const btnCurlNet = document.getElementById('btnCurlNet');
-    if (btnCurlNet) {
-      btnCurlNet.addEventListener('click', async () => {
-        if (!selectedReq) return;
-        const originalText = btnCurlNet.innerText;
-        try {
-          const curl = buildCurlCommand(selectedReq);
-          await navigator.clipboard.writeText(curl);
-          btnCurlNet.innerText = 'Copied!';
-          setTimeout(() => (btnCurlNet.innerText = originalText), 2000);
-        } catch (err) {
-          console.error('[BERIBUG] cURL copy failed:', err.message);
-          btnCurlNet.innerText = 'Copy failed';
-          setTimeout(() => (btnCurlNet.innerText = originalText), 2000);
+          // Form-urlencoded
+          if (payloadType === 'application/x-www-form-urlencoded' || (payloadText && payloadText.includes('=') && payloadText.includes('&'))) {
+            try {
+              const params = new URLSearchParams(payloadText);
+              const entries = [];
+              for (let [k, v] of params) {
+                entries.push([k, v]);
+              }
+              return renderKeyValueRows(entries, 'Form Parameters');
+            } catch (e) {}
+          }
+
+          // Default: raw text
+          // But try to detect binary-like payloads (numeric arrays/base64) and render nicer
+          const binaryRendered = tryRenderBinaryPayload(payloadText, ct);
+          if (binaryRendered) return binaryRendered;
+
+          return `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(payloadText)}</pre>`;
         }
-      });
-    }
 
-    function buildCurlCommand(req) {
-      const headers = req.requestHeaders || {};
-      const headerFlags = Object.entries(headers)
-        .filter(([k]) => k.toLowerCase() !== 'content-length')
-        .map(([k, v]) => `-H '${escapeSingleQuotes(`${k}: ${v}`)}'`)
-        .join(' ');
-      const method = req.method || 'GET';
-      const payloadType = String(req.payloadType || '').toLowerCase();
-      const body = req.payloadText || req.requestBody || '';
-      let bodyFlag = '';
+        function renderObjectAsTable(obj, title) {
+          const rows = Object.entries(obj || {}).map(([key, value]) => {
+            const displayValue = Array.isArray(value) || (value && typeof value === 'object')
+              ? escapeHtml(JSON.stringify(value, null, 2))
+              : escapeHtml(String(value));
+            return `<div class="detail-item"><div class="detail-label">${escapeHtml(key)}</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;word-break:break-word;font-size:11px;">${displayValue}</div></div>`;
+          }).join('');
+          return `<div class="detail-section"><div class="detail-section-header">${escapeHtml(title)}</div>${rows}</div>`;
+        }
 
-      if (payloadType === 'multipart/form-data' && req.parsedPayload && typeof req.parsedPayload === 'object') {
-        const formFlags = [];
-        Object.entries(req.parsedPayload).forEach(([key, value]) => {
-          if (Array.isArray(value)) {
-            value.forEach(item => {
-              if (item && typeof item === 'object' && item.name) {
-                formFlags.push(`-F '${escapeSingleQuotes(`${key}=@${item.name}`)}'`);
+        function renderKeyValueRows(entries, title) {
+          const rows = entries.map(([key, value]) => 
+            `<div class="detail-item"><div class="detail-label">${escapeHtml(String(key))}</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;word-break:break-word;font-size:11px;">${escapeHtml(String(value))}</div></div>`
+          ).join('');
+          return `<div class="detail-section"><div class="detail-section-header">${escapeHtml(title)}</div>${rows}</div>`;
+        }
+
+        // Render query parameters with support for complex values (JSON strings, nested key-values)
+        function renderQueryParameters(entries, title) {
+          const rows = entries.map(([key, value]) => {
+            const raw = value == null ? '' : String(value);
+            let valHtml = escapeHtml(raw);
+
+            // Try JSON parse
+            try {
+              const trimmed = raw.trim();
+              if (trimmed && (trimmed[0] === '{' || trimmed[0] === '[')) {
+                const parsed = JSON.parse(trimmed);
+                valHtml = `<div class="jt-root">${renderJsonTree(parsed)}</div>`;
+              } else if (trimmed.includes('=') && trimmed.includes('&')) {
+                // value looks like nested querystring (encoded object)
+                try {
+                  const sp = new URLSearchParams(trimmed);
+                  const sub = [...sp.entries()].map(([k, v]) => `<div style="display:flex"><div style="width:220px;color:#666">${escapeHtml(k)}</div><div style="flex:1">${escapeHtml(v)}</div></div>`).join('');
+                  valHtml = `<div style="font-family:monospace">${sub}</div>`;
+                } catch (e) {}
+              }
+            } catch (e) {
+              valHtml = escapeHtml(raw);
+            }
+
+            return `<div class="detail-item"><div class="detail-label">${escapeHtml(String(key))}</div><div class="detail-value" style="white-space:pre-wrap;font-family:monospace;word-break:break-word;font-size:11px;">${valHtml}</div></div>`;
+          }).join('');
+          return `<div class="detail-section"><div class="detail-section-header">${escapeHtml(title)}</div>${rows}</div>`;
+        }
+
+        // Binary detection & rendering helper
+        function tryRenderBinaryPayload(payload, contentType) {
+          if (!payload) return null;
+          const s = String(payload).trim();
+
+          // Detect numeric CSV byte arrays like: 31,139,8,0,0...
+          const csvMatch = /^\s*\d+(?:\s*,\s*\d+)+\s*$/;
+          let bytes = null;
+          if (csvMatch.test(s)) {
+            try {
+              const nums = s.split(',').map(x => parseInt(x.trim(), 10));
+              bytes = new Uint8Array(nums);
+            } catch (e) { bytes = null; }
+          }
+
+          // If payload was base64 encoded? Try decode if looks like base64 and fairly long
+          const maybeBase64 = /^[A-Za-z0-9+/=\r\n]+$/.test(s) && s.length > 100;
+          if (!bytes && maybeBase64) {
+            try {
+              // atob may throw
+              const bin = atob(s.replace(/\s+/g, ''));
+              const arr = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+              bytes = arr;
+            } catch (e) { bytes = null; }
+          }
+
+          // If contentType suggests binary
+          const ct = (contentType || '').toLowerCase();
+          if (!bytes && (ct.includes('application/octet-stream') || ct.includes('gzip') || ct.includes('application/x-protobuf') || ct.includes('multipart/form-data'))) {
+            // nothing to convert if payload is textual string but content-type binary
+            // attempt to interpret payload as latin1 bytes
+            try {
+              const arr = new Uint8Array(s.length);
+              for (let i = 0; i < s.length; i++) arr[i] = s.charCodeAt(i) & 0xff;
+              bytes = arr;
+            } catch (e) { bytes = null; }
+          }
+
+          if (!bytes) return null;
+
+          // Try decode as UTF-8
+          try {
+            const dec = new TextDecoder('utf-8', { fatal: false });
+            const text = dec.decode(bytes);
+            // Measure readability: ratio of printable chars
+            let printable = 0;
+            for (let i = 0; i < text.length; i++) {
+              const code = text.charCodeAt(i);
+              if (code === 9 || code === 10 || code === 13) printable++;
+              else if (code >= 32 && code <= 126) printable++;
+            }
+            const ratio = text.length ? printable / text.length : 0;
+            if (ratio > 0.6) {
+              return `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(text)}</pre>`;
+            }
+          } catch (e) {}
+
+          // If not readable, show binary indicator
+          const len = bytes.length;
+          const gzipHint = (bytes[0] === 0x1f && bytes[1] === 0x8b) ? ' (gzip)' : '';
+          const mimeHint = ct ? ` — ${escapeHtml(ct)}` : '';
+          return `<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(Binary payload)<br/>Byte length: ${len}${gzipHint}${mimeHint}</div>`;
+        }
+
+        function escapeHtml(text) {
+          return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+        }
+
+        // Copy as cURL (bash) handler — attach to the specific button
+        const btnCurlNet = document.getElementById('btnCurlNet');
+        if (btnCurlNet) {
+          btnCurlNet.addEventListener('click', async () => {
+            if (!selectedReq) return;
+            const originalText = btnCurlNet.innerText;
+            try {
+              const curl = buildCurlCommand(selectedReq);
+              await navigator.clipboard.writeText(curl);
+              btnCurlNet.innerText = 'Copied!';
+              setTimeout(() => (btnCurlNet.innerText = originalText), 2000);
+            } catch (err) {
+              console.error('[BERIBUG] cURL copy failed:', err.message);
+              btnCurlNet.innerText = 'Copy failed';
+              setTimeout(() => (btnCurlNet.innerText = originalText), 2000);
+            }
+          });
+        }
+
+        function buildCurlCommand(req) {
+          const headers = req.requestHeaders || {};
+          const headerFlags = Object.entries(headers)
+            .filter(([k]) => k.toLowerCase() !== 'content-length')
+            .map(([k, v]) => `-H '${escapeSingleQuotes(`${k}: ${v}`)}'`)
+            .join(' ');
+          const method = req.method || 'GET';
+          const payloadType = String(req.payloadType || '').toLowerCase();
+          const body = req.payloadText || req.requestBody || '';
+          let bodyFlag = '';
+
+          if (payloadType === 'multipart/form-data' && req.parsedPayload && typeof req.parsedPayload === 'object') {
+            const formFlags = [];
+            Object.entries(req.parsedPayload).forEach(([key, value]) => {
+              if (Array.isArray(value)) {
+                value.forEach(item => {
+                  if (item && typeof item === 'object' && item.name) {
+                    formFlags.push(`-F '${escapeSingleQuotes(`${key}=@${item.name}`)}'`);
+                  } else {
+                    formFlags.push(`-F '${escapeSingleQuotes(`${key}=${item}`)}'`);
+                  }
+                });
               } else {
-                formFlags.push(`-F '${escapeSingleQuotes(`${key}=${item}`)}'`);
+                formFlags.push(`-F '${escapeSingleQuotes(`${key}=${value}`)}'`);
               }
             });
-          } else {
-            formFlags.push(`-F '${escapeSingleQuotes(`${key}=${value}`)}'`);
+            bodyFlag = formFlags.join(' ');
+          } else if (body) {
+            bodyFlag = `--data-raw '${escapeSingleQuotes(body)}'`;
           }
-        });
-        bodyFlag = formFlags.join(' ');
-      } else if (body) {
-        bodyFlag = `--data-raw '${escapeSingleQuotes(body)}'`;
-      }
 
       // Preserve scheme even for chrome-extension/blob/data etc.
       const url = String(req.url || '');

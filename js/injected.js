@@ -222,6 +222,20 @@
         payloadType: 'multipart/form-data'
       };
     }
+
+    if (body instanceof URLSearchParams) {
+      const entries = {};
+      for (let [key, value] of body) {
+        entries[key] = value;
+      }
+      const payloadText = body.toString();
+      console.log('[BERIBUG] Captured URLSearchParams payload:', { payloadText });
+      return {
+        payloadText,
+        parsedPayload: entries,
+        payloadType: 'application/x-www-form-urlencoded'
+      };
+    }
     
     // Blob
     if (body instanceof Blob) {
@@ -244,6 +258,19 @@
       } catch (e) {
         console.warn('[BERIBUG] Failed to serialize Blob:', e.message);
         return { payloadText: null, parsedPayload: null, payloadType: 'binary' };
+      }
+    }
+
+    // ArrayBuffer / TypedArray
+    if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+      try {
+        const decoder = new TextDecoder('utf-8');
+        const text = decoder.decode(body);
+        const truncated = text.length > 50000 ? text.substring(0, 50000) + '... (TRUNCATED)' : text;
+        console.log('[BERIBUG] Captured Binary payload as text');
+        return { payloadText: truncated, parsedPayload: null, payloadType: 'binary-text' };
+      } catch (e) {
+        return { payloadText: '[Binary data]', parsedPayload: null, payloadType: 'binary' };
       }
     }
     
@@ -379,7 +406,8 @@
       parsedPayload: bodyInfo.parsedPayload,
       payloadType: bodyInfo.payloadType,
       status: 'PENDING',
-      type: 'fetch'
+      type: 'fetch',
+      isMonkeyPatched: true
     };
     sendLog('NETWORK', baseData);
 
@@ -445,11 +473,37 @@
         payloadType: 'multipart/form-data'
       };
     }
+
+    if (body instanceof URLSearchParams) {
+      const entries = {};
+      for (let [key, value] of body) {
+        entries[key] = value;
+      }
+      const payloadText = body.toString();
+      console.log('[BERIBUG] Captured URLSearchParams payload (sync):', { payloadText });
+      return {
+        payloadText,
+        parsedPayload: entries,
+        payloadType: 'application/x-www-form-urlencoded'
+      };
+    }
     
     // Blob - can't read async in sync context, just mark as binary
     if (body instanceof Blob) {
       console.log('[BERIBUG] Blob payload detected - async read required');
       return { payloadText: '[Blob - async read]', parsedPayload: null, payloadType: 'binary' };
+    }
+
+    // ArrayBuffer / TypedArray
+    if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) {
+      try {
+        const decoder = new TextDecoder('utf-8');
+        const text = decoder.decode(body);
+        const truncated = text.length > 50000 ? text.substring(0, 50000) + '... (TRUNCATED)' : text;
+        return { payloadText: truncated, parsedPayload: null, payloadType: 'binary-text' };
+      } catch (e) {
+        return { payloadText: '[Binary data]', parsedPayload: null, payloadType: 'binary' };
+      }
     }
     
     // String or other types
@@ -565,7 +619,8 @@
         parsedPayload: bodyInfo.parsedPayload,
         payloadType: bodyInfo.payloadType,
         status: 'PENDING', 
-        type: 'xhr' 
+        type: 'xhr',
+        isMonkeyPatched: true
       };
       sendLog('NETWORK', baseData);
 
@@ -606,6 +661,43 @@
       originalSend.apply(this, args);
     };
     return xhr;
+  };
+
+  // Override sendBeacon (Analytics/Telemetry)
+  const originalSendBeacon = navigator.sendBeacon;
+  navigator.sendBeacon = function(url, data) {
+    try {
+      // Determine content-type if data is a Blob
+      let contentType = '';
+      if (data instanceof Blob) {
+        contentType = data.type;
+      }
+      
+      // Use synchronous serialization as sendBeacon is meant to be fast/non-blocking
+      const bodyInfo = serializeRequestBodySync(data, contentType);
+      const maskedBody = maskSensitiveData(bodyInfo.payloadText);
+      
+      sendLog('NETWORK', {
+        time: new Date().toISOString(),
+        method: 'POST',
+        url: url,
+        requestBody: maskedBody,
+        payloadText: maskedBody,
+        parsedPayload: bodyInfo.parsedPayload,
+        payloadType: bodyInfo.payloadType,
+        status: 200, // sendBeacon usually succeeds or is queued
+        type: 'ping',
+        isBeacon: true,
+        isMonkeyPatched: true,
+        responseBody: '(Beacon Sent)',
+        size: maskedBody ? maskedBody.length : 0
+      });
+      console.log('[BERIBUG] Captured sendBeacon payload for:', url);
+    } catch (e) {
+      console.warn('[BERIBUG] Failed to intercept sendBeacon:', e.message);
+    }
+    
+    return originalSendBeacon.apply(this, arguments);
   };
 })();
 
