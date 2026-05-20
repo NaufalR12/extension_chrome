@@ -102,28 +102,6 @@
           <input type="number" id="activeEditDuration" min="0.1" step="0.5" value="5">
         </div>
 
-        <div class="prop-group" id="propAspect">
-          <label for="aspectRatioPreset">Output Aspect Ratio</label>
-          <select id="aspectRatioPreset">
-            <option value="original">Original</option>
-            <option value="1:1">1:1</option>
-            <option value="4:5">4:5</option>
-            <option value="3:4">3:4</option>
-            <option value="9:16">9:16</option>
-            <option value="16:9">16:9</option>
-            <option value="custom">Custom</option>
-          </select>
-
-          <div id="customAspectWrap" class="custom-aspect hidden">
-            <label>Custom Ratio</label>
-            <div class="custom-aspect-row">
-              <input type="number" id="customAspectWidth" min="1" step="1" value="16" placeholder="W">
-              <span>:</span>
-              <input type="number" id="customAspectHeight" min="1" step="1" value="9" placeholder="H">
-            </div>
-          </div>
-        </div>
-
         <div class="prop-group" id="propDraw" style="display:none;">
           <label>Line Thickness: <span id="valStrokeWidth">3</span>px</label>
           <input type="range" id="propStrokeWidth" min="1" max="20" value="3">
