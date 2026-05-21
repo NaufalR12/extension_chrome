@@ -20,7 +20,8 @@
   ],
   "host_permissions": [
     "<all_urls>",
-    "https://www.googleapis.com/*",
+    "https://login.microsoftonline.com/*",
+    "https://graph.microsoft.com/*",
     "https://api.monday.com/v2",
     "https://api.country.is/*"
   ],
@@ -44,9 +45,5 @@
       "resources": ["js/injected.js"],
       "matches": ["<all_urls>"]
     }
-  ],
-  "oauth2": {
-    "client_id": "1061102325924-3immmr4ma8f31hdumapkfasg2am6dnr4.apps.googleusercontent.com",
-    "scopes": ["https://www.googleapis.com/auth/drive.file"]
-  }
+  ]
 }

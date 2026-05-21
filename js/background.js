@@ -1,3 +1,5 @@
+import { getAccessToken, login } from './auth.js';
+
 let isRecording = false;
 let recordingStartTime = null;
 let isPaused = false;
@@ -1905,14 +1907,12 @@ async function commitUpload(title, desc, videoBase64, infoData) {
 
   logsData.info = finalInfo;
 
-  const token = await new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({ interactive: true }, (token) => {
-      if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-      else resolve(token);
-    });
-  });
+  let token = await getAccessToken();
+  if (!token) {
+    token = await login();
+  }
 
-  if (!token) throw new Error("Could not authenticate with Google");
+  if (!token) throw new Error("Could not authenticate with OneDrive");
 
   const folderId = await getOrCreateFolder(token, "BERIBUG_Reports_App");
 
@@ -1965,14 +1965,14 @@ async function commitUpload(title, desc, videoBase64, infoData) {
   const timeStamp = new Date().toISOString().replace(/[:.]/g, "-");
   const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, "_");
 
-  const videoFileId = await uploadFileToDrive(
+  const videoFileId = await uploadFileToOneDrive(
     token,
     `BERIBUG_${sanitizedTitle}_${timeStamp}.webm`,
     "video/webm",
     videoBlob,
     folderId,
   );
-  const jsonFileId = await uploadFileToDrive(
+  const jsonFileId = await uploadFileToOneDrive(
     token,
     `BERIBUG_${sanitizedTitle}_${timeStamp}.json`,
     "application/json",
@@ -1980,19 +1980,16 @@ async function commitUpload(title, desc, videoBase64, infoData) {
     folderId,
   );
 
-  await makeFilePublic(token, videoFileId);
-  await makeFilePublic(token, jsonFileId); // Make JSON public as well to be read by Player
-
-  // Give Google a moment to propagate permissions
-  await new Promise((r) => setTimeout(r, 1000));
+  const videoDirectUrl = await makeFilePublicAndGetDirectUrl(token, videoFileId);
+  const jsonDirectUrl = await makeFilePublicAndGetDirectUrl(token, jsonFileId);
 
   resetLogs();
   pendingVideoBase64 = null;
   chrome.storage.local.remove(["pendingVideo", "pendingReport"]);
   await clearVideoFromDB();
 
-  // Return Hosted Player Web App URL (Netlify Public Link)
-  return `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoFileId}&l=${jsonFileId}`;
+  // Return Hosted Player Web App URL with direct URLs
+  return `https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(videoDirectUrl)}&lUrl=${encodeURIComponent(jsonDirectUrl)}`;
 }
 
 async function getVideoFromDB() {
@@ -2065,103 +2062,159 @@ async function clearVideoFromDB() {
 }
 
 async function getOrCreateFolder(token, folderName) {
-  const query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`;
-
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const json = await res.json();
-
-  if (json.files && json.files.length > 0) {
-    return json.files[0].id; // Folder exists
+  const checkUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderName}`;
+  try {
+    const res = await fetch(checkUrl, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.id;
+    }
+  } catch (e) {
+    console.warn("Folder check failed, trying to create:", e);
   }
 
   // Create folder
-  const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+  const createUrl = `https://graph.microsoft.com/v1.0/me/drive/root/children`;
+  const createRes = await fetch(createUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       name: folderName,
-      mimeType: "application/vnd.google-apps.folder",
-    }),
-  });
-  const createJson = await createRes.json();
-  return createJson.id;
-}
-
-async function uploadFileToDrive(
-  token,
-  filename,
-  mimeType,
-  fileBlob,
-  folderId,
-) {
-  // 1. Create file metadata
-  const metadata = {
-    name: filename,
-    mimeType: mimeType,
-    parents: [folderId],
-  };
-
-  const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(metadata),
+      folder: {},
+      "@microsoft.graph.conflictBehavior": "fail"
+    })
   });
 
   if (!createRes.ok) {
-    throw new Error(
-      `Failed to create file metadata: ${createRes.status} ${await createRes.text()}`,
-    );
+    // Retry check in case of race condition
+    const checkRes = await fetch(checkUrl, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (checkRes.ok) {
+      const data = await checkRes.json();
+      return data.id;
+    }
+    throw new Error(`Failed to create folder ${folderName}: ${createRes.status} ${await createRes.text()}`);
   }
-
-  const fileData = await createRes.json();
-  const fileId = fileData.id;
-
-  // 2. Upload file content (Simple Media Upload - supports up to 5TB)
-  const uploadRes = await fetch(
-    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": mimeType,
-      },
-      body: fileBlob,
-    },
-  );
-
-  if (!uploadRes.ok) {
-    throw new Error(
-      `Failed to upload file content: ${uploadRes.status} ${await uploadRes.text()}`,
-    );
-  }
-
-  return fileId;
+  const data = await createRes.json();
+  return data.id;
 }
 
-async function makeFilePublic(token, fileId) {
-  await fetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}/permissions`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        role: "reader",
-        type: "anyone",
-      }),
+async function uploadFileToOneDrive(token, filename, mimeType, fileBlob, folderId) {
+  if (fileBlob.size < 4 * 1024 * 1024) {
+    return await uploadSmallFile(token, folderId, filename, mimeType, fileBlob);
+  } else {
+    return await uploadLargeFile(token, folderId, filename, mimeType, fileBlob);
+  }
+}
+
+async function uploadSmallFile(token, folderId, filename, mimeType, fileBlob) {
+  const url = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/content`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": mimeType
     },
-  );
+    body: fileBlob
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to upload small file ${filename}: ${res.status} ${await res.text()}`);
+  }
+  const data = await res.json();
+  return data.id;
+}
+
+async function uploadLargeFile(token, folderId, filename, mimeType, fileBlob) {
+  const sessionUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/createUploadSession`;
+  const sessionRes = await fetch(sessionUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      item: {
+        "@microsoft.graph.conflictBehavior": "rename",
+        name: filename
+      }
+    })
+  });
+
+  if (!sessionRes.ok) {
+    throw new Error(`Failed to create upload session: ${sessionRes.status} ${await sessionRes.text()}`);
+  }
+
+  const sessionData = await sessionRes.json();
+  const uploadUrl = sessionData.uploadUrl;
+
+  const fileSize = fileBlob.size;
+  const chunkSize = 327680 * 10; // ~3.2 MB chunks
+  let start = 0;
+
+  while (start < fileSize) {
+    const end = Math.min(start + chunkSize, fileSize);
+    const chunk = fileBlob.slice(start, end);
+
+    const res = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": chunk.size,
+        "Content-Range": `bytes ${start}-${end - 1}/${fileSize}`
+      },
+      body: chunk
+    });
+
+    if (!res.ok) {
+      throw new Error(`Chunk upload failed at range ${start}-${end-1}: ${res.status} ${await res.text()}`);
+    }
+
+    if (res.status === 201 || res.status === 200) {
+      const finishedData = await res.json();
+      return finishedData.id;
+    }
+
+    start = end;
+  }
+
+  throw new Error("Upload session finished but no file ID returned");
+}
+
+async function makeFilePublicAndGetDirectUrl(token, fileId) {
+  const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      type: "view",
+      scope: "anonymous"
+    })
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to create sharing link: ${res.status} ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  const sharingLink = data.link.webUrl;
+
+  // Convert to direct URL
+  const base64Value = btoa(sharingLink);
+  const safeBase64Value = base64Value
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+
+  return `https://api.onedrive.com/v1.0/shares/u!${safeBase64Value}/root/content`;
 }
 
 async function createMondayTicket(apiKey, boardId, videoUrl, timestamp) {
@@ -2199,7 +2252,7 @@ async function createMondayTicket(apiKey, boardId, videoUrl, timestamp) {
     mutation {
       create_update (
         item_id: ${itemId},
-        body: "Recorded Video & Logs: <br> <a href='${videoUrl}'>View on Google Drive</a>"
+        body: "Recorded Video & Logs: <br> <a href='${videoUrl}'>View on OneDrive</a>"
       ) { id }
     }
   `;

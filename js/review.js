@@ -1,3 +1,5 @@
+import { getAccessToken, login } from './auth.js';
+
 document.addEventListener("DOMContentLoaded", () => {
   const videoPreview = document.getElementById("videoPreview");
   const btnSave = document.getElementById("btnSave");
@@ -109,23 +111,25 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function loadFromDrive(vId, lId, edit) {
     loading.classList.remove("hidden");
-    loading.textContent = "Fetching from Drive...";
+    loading.textContent = "Fetching from OneDrive...";
 
     try {
-      authToken = await new Promise((resolve, reject) => {
-        chrome.identity.getAuthToken({ interactive: true }, (token) => {
-          if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-          else resolve(token);
-        });
-      });
+      authToken = await getAccessToken();
+      if (!authToken) {
+        authToken = await login();
+      }
+      if (!authToken) throw new Error("Could not authenticate with OneDrive");
 
       // Fetch JSON first for immediate log rendering
       const jsonRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${lId}?alt=media`,
+        `https://graph.microsoft.com/v1.0/me/drive/items/${lId}/content`,
         {
           headers: { Authorization: `Bearer ${authToken}` },
         },
       );
+      if (!jsonRes.ok) {
+        throw new Error("Failed to fetch JSON content: " + jsonRes.status);
+      }
       const reportData = await jsonRes.json();
 
       // Setup Save Button for Edit Mode
@@ -146,7 +150,7 @@ document.addEventListener("DOMContentLoaded", () => {
       loading.textContent = "Fetching video...";
 
       // Fetch Video in background
-      const videoFetchUrl = `https://www.googleapis.com/drive/v3/files/${vId}?alt=media`;
+      const videoFetchUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${vId}/content`;
       fetch(videoFetchUrl, {
         headers: { Authorization: `Bearer ${authToken}` },
       })
@@ -171,7 +175,7 @@ document.addEventListener("DOMContentLoaded", () => {
           setTimeout(() => loading.classList.add("hidden"), 3000);
         });
     } catch (err) {
-      showError("Failed to load from Drive: " + err);
+      showError("Failed to load from OneDrive: " + err);
     }
   }
 
@@ -2156,22 +2160,28 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const videoId = urlParams.get("v");
 
-        // 1. Fetch current JSON metadata & content
+        // 1. Fetch current JSON content
         const res = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${existingJsonId}?fields=name,id&alt=media`,
+          `https://graph.microsoft.com/v1.0/me/drive/items/${existingJsonId}/content`,
           {
             headers: { Authorization: `Bearer ${authToken}` },
           },
         );
+        if (!res.ok) {
+          throw new Error("Failed to fetch JSON content: " + res.status);
+        }
         const fullData = await res.json();
 
         // Also fetch name specifically (media download doesn't give metadata)
         const metaRes = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${existingJsonId}?fields=name`,
+          `https://graph.microsoft.com/v1.0/me/drive/items/${existingJsonId}`,
           {
             headers: { Authorization: `Bearer ${authToken}` },
           },
         );
+        if (!metaRes.ok) {
+          throw new Error("Failed to fetch JSON metadata: " + metaRes.status);
+        }
         const meta = await metaRes.json();
         const currentName = meta.name || ""; // e.g. BERIBUG_OldTitle_2026-04-23T12-00-00-000Z.json
 
@@ -2196,19 +2206,25 @@ document.addEventListener("DOMContentLoaded", () => {
         const blob = new Blob([JSON.stringify(fullData, null, 2)], {
           type: "application/json",
         });
-        await fetch(
-          `https://www.googleapis.com/upload/drive/v3/files/${existingJsonId}?uploadType=media`,
+        const putContentRes = await fetch(
+          `https://graph.microsoft.com/v1.0/me/drive/items/${existingJsonId}/content`,
           {
-            method: "PATCH",
-            headers: { Authorization: `Bearer ${authToken}` },
+            method: "PUT",
+            headers: {
+              Authorization: `Bearer ${authToken}`,
+              "Content-Type": "application/json"
+            },
             body: blob,
           },
         );
+        if (!putContentRes.ok) {
+          throw new Error(`Failed to update JSON content: ${putContentRes.status} ${await putContentRes.text()}`);
+        }
 
         // 3. Update File Names (Metadata PATCH)
         // JSON Name
-        await fetch(
-          `https://www.googleapis.com/drive/v3/files/${existingJsonId}`,
+        const renameJsonRes = await fetch(
+          `https://graph.microsoft.com/v1.0/me/drive/items/${existingJsonId}`,
           {
             method: "PATCH",
             headers: {
@@ -2218,18 +2234,34 @@ document.addEventListener("DOMContentLoaded", () => {
             body: JSON.stringify({ name: newJsonName }),
           },
         );
+        if (!renameJsonRes.ok) {
+          throw new Error(`Failed to rename JSON file: ${renameJsonRes.status}`);
+        }
 
         // Video Name
         if (videoId) {
-          await fetch(`https://www.googleapis.com/drive/v3/files/${videoId}`, {
-            method: "PATCH",
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-              "Content-Type": "application/json",
+          const renameVideoRes = await fetch(
+            `https://graph.microsoft.com/v1.0/me/drive/items/${videoId}`,
+            {
+              method: "PATCH",
+              headers: {
+                Authorization: `Bearer ${authToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ name: newVideoName }),
             },
-            body: JSON.stringify({ name: newVideoName }),
-          });
+          );
+          if (!renameVideoRes.ok) {
+            throw new Error(`Failed to rename video file: ${renameVideoRes.status}`);
+          }
         }
+
+        // Generate sharing links & direct download URLs
+        let newVUrl = "";
+        if (videoId) {
+          newVUrl = await makeFilePublicAndGetDirectUrl(authToken, videoId);
+        }
+        const newLUrl = await makeFilePublicAndGetDirectUrl(authToken, existingJsonId);
 
         loading.classList.add("hidden");
         btnSave.disabled = false;
@@ -2240,8 +2272,8 @@ document.addEventListener("DOMContentLoaded", () => {
         document.querySelector("#stepSuccess h2").textContent =
           "Successfully Updated!";
 
-        // Use the Netlify player URL for the share link
-        shareLink.value = `https://beribug-player.netlify.app/?v=${videoId}&l=${existingJsonId}`;
+        // Use the Netlify player URL with direct URLs for the share link
+        shareLink.value = `https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(newVUrl)}&lUrl=${encodeURIComponent(newLUrl)}`;
       } catch (err) {
         showError("Failed to update: " + err);
         btnSave.disabled = false;
@@ -2303,8 +2335,38 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       btnCopy.textContent = ogText;
     }, 2000);
-  });
 });
+
+async function makeFilePublicAndGetDirectUrl(token, fileId) {
+  const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      type: "view",
+      scope: "anonymous"
+    })
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to create sharing link: ${res.status} ${await res.text()}`);
+  }
+
+  const data = await res.json();
+  const sharingLink = data.link.webUrl;
+
+  // Convert to direct URL
+  const base64Value = btoa(sharingLink);
+  const safeBase64Value = base64Value
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+
+  return `https://api.onedrive.com/v1.0/shares/u!${safeBase64Value}/root/content`;
+}
 
 async function saveVideoToDB(blob) {
   return new Promise((resolve, reject) => {

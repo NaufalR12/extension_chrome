@@ -1,3 +1,5 @@
+import { getAccessToken, login, logout } from './auth.js';
+
 document.addEventListener('DOMContentLoaded', () => {
   const navMyBugs = document.getElementById('navMyBugs');
   const navTrash = document.getElementById('navTrash');
@@ -39,8 +41,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let authToken = null;
   let userEmail = '';
+  let mainFolderId = null;
+  let trashFolderId = null;
 
-  // Tab Navigation
   // Tab Navigation
   navMyBugs.addEventListener('click', () => {
     switchTab(navMyBugs, viewMyBugs);
@@ -67,29 +70,140 @@ document.addEventListener('DOMContentLoaded', () => {
   initAuth();
 
   function initAuth() {
-    chrome.identity.getAuthToken({ interactive: true }, function(token) {
-      if (chrome.runtime.lastError || !token) {
-        userEmailSpan.textContent = 'Not logged in';
-        showError("Authentication failed. Please login from the popup.");
-        return;
+    getAccessToken().then(token => {
+      if (!token) {
+        login().then(newToken => {
+          if (!newToken) {
+            userEmailSpan.textContent = 'Not logged in';
+            showError("Authentication failed. Please login.");
+            return;
+          }
+          authToken = newToken;
+          onAuthSuccess();
+        }).catch(err => {
+          userEmailSpan.textContent = 'Not logged in';
+          showError("Authentication failed: " + err.message);
+        });
+      } else {
+        authToken = token;
+        onAuthSuccess();
       }
-      authToken = token;
-      
-      // Get user email & full info
-      fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
-        headers: { Authorization: `Bearer ${token}` }
-      }).then(r => r.json()).then(data => {
-        if (data.user) {
-            userEmail = data.user.emailAddress;
-            userEmailSpan.textContent = userEmail;
-            
-            // Also update settings page if open
-            updateSettingsUI(data);
-        }
-      });
-
-      loadBugs();
     });
+  }
+
+  async function onAuthSuccess() {
+    try {
+      const userRes = await fetch('https://graph.microsoft.com/v1.0/me', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const userData = await userRes.json();
+      userEmail = userData.userPrincipalName || userData.mail || 'OneDrive User';
+      userEmailSpan.textContent = userEmail;
+    } catch (e) {
+      console.error("Failed to fetch user email:", e);
+    }
+    loadBugs();
+  }
+
+  // Helper Functions
+  async function getOrCreateFolder(token, name, parentId = null) {
+    const parentPath = parentId ? `items/${parentId}` : 'root';
+    const checkUrl = `https://graph.microsoft.com/v1.0/me/drive/${parentPath}:/${name}`;
+    try {
+      const res = await fetch(checkUrl, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.id;
+      }
+    } catch (e) {
+      console.warn("Folder check failed, trying to create:", e);
+    }
+
+    const createUrl = `https://graph.microsoft.com/v1.0/me/drive/${parentPath}/children`;
+    const createRes = await fetch(createUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        name: name,
+        folder: {},
+        "@microsoft.graph.conflictBehavior": "fail"
+      })
+    });
+
+    if (!createRes.ok) {
+      const checkRes = await fetch(checkUrl, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (checkRes.ok) {
+        const data = await checkRes.json();
+        return data.id;
+      }
+      throw new Error(`Failed to create folder ${name}: ${createRes.status}`);
+    }
+    const data = await createRes.json();
+    return data.id;
+  }
+
+  async function moveFileToFolder(fileId, targetFolderId) {
+    const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}`;
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        parentReference: {
+          id: targetFolderId
+        }
+      })
+    });
+    if (!res.ok) throw new Error(`Failed to move file ${fileId}: ${res.status}`);
+    return await res.json();
+  }
+
+  async function deleteFile(fileId) {
+    const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${authToken}` }
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`Failed to delete file ${fileId}: ${res.status}`);
+    }
+  }
+
+  async function getSharingLink(fileId) {
+    const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        type: "view",
+        scope: "anonymous"
+      })
+    });
+    if (!res.ok) throw new Error("Failed to get sharing link: " + res.status);
+    const data = await res.json();
+    return data.link.webUrl;
+  }
+
+  async function getOrCreateDirectUrl(fileId) {
+    const sharingLink = await getSharingLink(fileId);
+    const base64Value = btoa(sharingLink);
+    const safeBase64Value = base64Value
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+    return `https://api.onedrive.com/v1.0/shares/u!${safeBase64Value}/root/content`;
   }
 
   // Load Data
@@ -102,32 +216,20 @@ document.addEventListener('DOMContentLoaded', () => {
     bugListBody.innerHTML = '';
 
     try {
-      // 1. Get Folder ID
-      const query = "name='BERIBUG_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
-      let res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`, {
+      mainFolderId = await getOrCreateFolder(authToken, "BERIBUG_Reports_App");
+      
+      const fileUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${mainFolderId}/children?$orderby=createdDateTime desc`;
+      const res = await fetch(fileUrl, {
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      let json = await res.json();
-      if (!json.files || json.files.length === 0) {
-        showError("Folder BERIBUG_Reports_App not found. Have you recorded any reports yet?");
-        return;
-      }
-      const folderId = json.files[0].id;
+      if (!res.ok) throw new Error("Gagal memuat file dari OneDrive: " + res.status);
+      const json = await res.json();
+      const files = json.value || [];
 
-      // 2. Get Files
-      const fileQuery = `'${folderId}' in parents and trashed=false`;
-      res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(fileQuery)}&fields=files(id,name,mimeType,createdTime)&orderBy=createdTime desc`, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      json = await res.json();
-      const files = json.files || [];
-
-      // 3. Group by Timestamp
-      // Expected name format: BERIBUG_SanitizedTitle_TIMESTAMP.(webm|png|json)
       const bugMap = {};
 
       files.forEach(f => {
-        // Splitting by _
+        if (f.folder) return; // Skip subfolders like Trash
         const parts = f.name.split('_');
         if (parts.length >= 3) {
           const extPart = parts[parts.length - 1]; // TIMESTAMP.ext
@@ -137,7 +239,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const rawTitle = parts.slice(1, parts.length - 1).join(' ');
 
           if (!bugMap[ts]) {
-            bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdTime) };
+            bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdDateTime || f.fileSystemInfo?.createdDateTime || Date.now()) };
           }
           if (ext === 'webm') bugMap[ts].videoFile = f;
           if (ext === 'png') bugMap[ts].imageFile = f;
@@ -154,7 +256,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // Render
       bugsArray.forEach(bug => {
         const tr = document.createElement('tr');
         
@@ -174,7 +275,20 @@ document.addEventListener('DOMContentLoaded', () => {
           const btnPlay = document.createElement('button');
           btnPlay.className = 'btn secondary btn-small';
           btnPlay.textContent = 'Play';
-          btnPlay.onclick = () => window.open(`https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${bug.videoFile.id}&l=${bug.jsonFile.id}`, '_blank');
+          btnPlay.onclick = async () => {
+            btnPlay.disabled = true;
+            btnPlay.textContent = 'Linking...';
+            try {
+              const vUrl = await getOrCreateDirectUrl(bug.videoFile.id);
+              const lUrl = await getOrCreateDirectUrl(bug.jsonFile.id);
+              window.open(`https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(vUrl)}&lUrl=${encodeURIComponent(lUrl)}`, '_blank');
+            } catch (e) {
+              alert("Error: " + e.message);
+            } finally {
+              btnPlay.disabled = false;
+              btnPlay.textContent = 'Play';
+            }
+          };
 
           const btnEdit = document.createElement('button');
           btnEdit.className = 'btn primary btn-small';
@@ -187,7 +301,19 @@ document.addEventListener('DOMContentLoaded', () => {
           const btnOpen = document.createElement('button');
           btnOpen.className = 'btn secondary btn-small';
           btnOpen.textContent = 'Open';
-          btnOpen.onclick = () => window.open(`https://drive.google.com/file/d/${bug.imageFile.id}/view`, '_blank');
+          btnOpen.onclick = async () => {
+            btnOpen.disabled = true;
+            btnOpen.textContent = 'Linking...';
+            try {
+              const shareLink = await getSharingLink(bug.imageFile.id);
+              window.open(shareLink, '_blank');
+            } catch (e) {
+              alert("Error: " + e.message);
+            } finally {
+              btnOpen.disabled = false;
+              btnOpen.textContent = 'Open';
+            }
+          };
           actionTd.appendChild(btnOpen);
         }
 
@@ -213,6 +339,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  btnRefreshTrash.addEventListener('click', loadTrash);
+
   async function loadTrash() {
     loadingTrash.classList.remove('hidden');
     trashTable.classList.add('hidden');
@@ -220,30 +348,20 @@ document.addEventListener('DOMContentLoaded', () => {
     trashListBody.innerHTML = '';
 
     try {
-      // 1. Get Folder ID
-      const query = "name='BERIBUG_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
-      let res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`, {
+      mainFolderId = await getOrCreateFolder(authToken, "BERIBUG_Reports_App");
+      trashFolderId = await getOrCreateFolder(authToken, "Trash", mainFolderId);
+
+      const fileUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${trashFolderId}/children?$orderby=createdDateTime desc`;
+      const res = await fetch(fileUrl, {
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      let json = await res.json();
-      if (!json.files || json.files.length === 0) {
-        showErrorTrash("Folder BERIBUG_Reports_App not found.");
-        return;
-      }
-      const folderId = json.files[0].id;
+      if (!res.ok) throw new Error("Gagal memuat Trash dari OneDrive: " + res.status);
+      const json = await res.json();
+      const files = json.value || [];
 
-      // 2. Get Trashed Files
-      // Note: trashed=true is enough, but we want files in our app folder
-      const fileQuery = `'${folderId}' in parents and trashed=true`;
-      res = await fetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(fileQuery)}&fields=files(id,name,mimeType,createdTime)&orderBy=createdTime desc`, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      json = await res.json();
-      const files = json.files || [];
-
-      // 3. Group by Timestamp (similar to loadBugs)
       const bugMap = {};
       files.forEach(f => {
+        if (f.folder) return;
         const parts = f.name.split('_');
         if (parts.length >= 3) {
           const extPart = parts[parts.length - 1];
@@ -253,7 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const rawTitle = parts.slice(1, parts.length - 1).join(' ');
 
           if (!bugMap[ts]) {
-            bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdTime) };
+            bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdDateTime || f.fileSystemInfo?.createdDateTime || Date.now()) };
           }
           if (ext === 'webm') bugMap[ts].videoFile = f;
           if (ext === 'png') bugMap[ts].imageFile = f;
@@ -262,7 +380,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       const bugsArray = Object.values(bugMap)
-        .filter(b => b.videoFile || b.jsonFile) // In trash, maybe only one is left?
+        .filter(b => b.videoFile || b.imageFile || b.jsonFile)
         .sort((a,b) => b.date - a.date);
 
       if (bugsArray.length === 0) {
@@ -270,7 +388,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // Render Trash
       bugsArray.forEach(bug => {
         const tr = document.createElement('tr');
         
@@ -325,32 +442,20 @@ document.addEventListener('DOMContentLoaded', () => {
     errorMsgTrash.classList.remove('hidden');
   }
 
-  btnRefreshTrash.addEventListener('click', loadTrash);
-
   async function restoreBug(bug) {
     if (!confirm(`Restore "${bug.originalTitle}"?`)) return;
     
     try {
+      mainFolderId = await getOrCreateFolder(authToken, "BERIBUG_Reports_App");
+      
       if (bug.jsonFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
-          method: 'PATCH',
-          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trashed: false })
-        });
+        await moveFileToFolder(bug.jsonFile.id, mainFolderId);
       }
       if (bug.videoFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
-          method: 'PATCH',
-          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trashed: false })
-        });
+        await moveFileToFolder(bug.videoFile.id, mainFolderId);
       }
       if (bug.imageFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.imageFile.id}`, {
-          method: 'PATCH',
-          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trashed: false })
-        });
+        await moveFileToFolder(bug.imageFile.id, mainFolderId);
       }
       alert("Report restored.");
       loadTrash();
@@ -364,22 +469,13 @@ document.addEventListener('DOMContentLoaded', () => {
     
     try {
       if (bug.jsonFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${authToken}` }
-        });
+        await deleteFile(bug.jsonFile.id);
       }
       if (bug.videoFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${authToken}` }
-        });
+        await deleteFile(bug.videoFile.id);
       }
       if (bug.imageFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.imageFile.id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${authToken}` }
-        });
+        await deleteFile(bug.imageFile.id);
       }
       alert("Report deleted permanently.");
       loadTrash();
@@ -393,8 +489,6 @@ document.addEventListener('DOMContentLoaded', () => {
     errorMsg.textContent = msg;
     errorMsg.classList.remove('hidden');
   }
-
-
 
   // --- DELETE LOGIC ---
   const btnConfirmTrash = document.getElementById('btnConfirmTrash');
@@ -415,26 +509,18 @@ document.addEventListener('DOMContentLoaded', () => {
     btnConfirmTrash.textContent = "Processing...";
 
     try {
+      mainFolderId = await getOrCreateFolder(authToken, "BERIBUG_Reports_App");
+      trashFolderId = await getOrCreateFolder(authToken, "Trash", mainFolderId);
+
       // Move JSON to trash
-      await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trashed: true })
-      });
+      await moveFileToFolder(bug.jsonFile.id, trashFolderId);
+      
       // Move Video/Image to trash
       if (bug.videoFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
-          method: 'PATCH',
-          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trashed: true })
-        });
+        await moveFileToFolder(bug.videoFile.id, trashFolderId);
       }
       if (bug.imageFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.imageFile.id}`, {
-          method: 'PATCH',
-          headers: { Authorization: `Bearer ${authToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ trashed: true })
-        });
+        await moveFileToFolder(bug.imageFile.id, trashFolderId);
       }
 
       deleteModal.classList.add('hidden');
@@ -458,22 +544,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       // Delete JSON permanently
-      await fetch(`https://www.googleapis.com/drive/v3/files/${bug.jsonFile.id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
+      await deleteFile(bug.jsonFile.id);
       // Delete Video/Image permanently
       if (bug.videoFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.videoFile.id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${authToken}` }
-        });
+        await deleteFile(bug.videoFile.id);
       }
       if (bug.imageFile) {
-        await fetch(`https://www.googleapis.com/drive/v3/files/${bug.imageFile.id}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${authToken}` }
-        });
+        await deleteFile(bug.imageFile.id);
       }
 
       deleteModal.classList.add('hidden');
@@ -489,37 +566,31 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   // --- LOGOUT LOGIC ---
-  btnLogout.onclick = () => {
-    if (!authToken) return;
-    
-    // Revoke from Google
-    fetch('https://accounts.google.com/o/oauth2/revoke?token=' + authToken)
-      .then(() => {
-        // Remove from cache
-        return new Promise(res => chrome.identity.removeCachedAuthToken({token: authToken}, res));
-      })
-      .then(() => {
-        alert("Logged out successfully.");
-        // Close window or reload
-        window.close();
-      })
-      .catch(err => {
-        alert("Logout error: " + err);
-      });
+  btnLogout.onclick = async () => {
+    try {
+      await logout();
+      alert("Logged out successfully.");
+      window.close();
+    } catch (err) {
+      alert("Logout error: " + err);
+    }
   };
 
   // --- SETTINGS LOGIC ---
-  function updateSettingsUI(data) {
-    if (!data.user) return;
-    userNameDisplay.textContent = data.user.displayName;
-    userEmailDisplay.textContent = data.user.emailAddress;
-    if (data.user.photoLink) {
-      userPhoto.style.backgroundImage = `url(${data.user.photoLink})`;
+  function updateSettingsUI(userData, driveData, photoUrl) {
+    userNameDisplay.textContent = userData.displayName || 'OneDrive User';
+    userEmailDisplay.textContent = userData.userPrincipalName || userData.mail || '';
+    
+    if (photoUrl) {
+      userPhoto.style.backgroundImage = `url(${photoUrl})`;
+    } else {
+      userPhoto.style.backgroundImage = 'none';
+      userPhoto.textContent = (userData.displayName || 'U').substring(0, 1).toUpperCase();
     }
 
-    if (data.storageQuota) {
-      const used = parseInt(data.storageQuota.usage);
-      const limit = parseInt(data.storageQuota.limit);
+    if (driveData && driveData.quota) {
+      const used = driveData.quota.used;
+      const limit = driveData.quota.total;
       const pct = (used / limit * 100).toFixed(1);
       
       storageText.textContent = `${formatSize(used)} / ${formatSize(limit)} (${pct}%)`;
@@ -533,12 +604,33 @@ document.addEventListener('DOMContentLoaded', () => {
   async function loadAccountInfo() {
     if (!authToken) return;
     try {
-      const res = await fetch('https://www.googleapis.com/drive/v3/about?fields=user,storageQuota', {
+      const userRes = await fetch('https://graph.microsoft.com/v1.0/me', {
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      const data = await res.json();
-      updateSettingsUI(data);
-    } catch (e) { console.error("Failed to load account info:", e); }
+      const userData = await userRes.json();
+      
+      const driveRes = await fetch('https://graph.microsoft.com/v1.0/me/drive', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      const driveData = await driveRes.json();
+
+      let photoUrl = '';
+      try {
+        const photoRes = await fetch('https://graph.microsoft.com/v1.0/me/photo/$value', {
+          headers: { Authorization: `Bearer ${authToken}` }
+        });
+        if (photoRes.ok) {
+          const blob = await photoRes.blob();
+          photoUrl = URL.createObjectURL(blob);
+        }
+      } catch (e) {
+        console.warn("Failed to fetch profile photo:", e);
+      }
+
+      updateSettingsUI(userData, driveData, photoUrl);
+    } catch (e) { 
+      console.error("Failed to load account info:", e); 
+    }
   }
 
   function loadAutoDeleteSettings() {
@@ -567,7 +659,6 @@ document.addEventListener('DOMContentLoaded', () => {
       autoDeleteEnabled: enabled,
       autoDeleteDays: days
     }, () => {
-      // Sync alarm
       chrome.runtime.sendMessage({ action: 'SYNC_AUTO_DELETE_ALARM' });
       
       const originalText = btnSaveSettings.textContent;
