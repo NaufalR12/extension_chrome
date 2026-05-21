@@ -3,13 +3,12 @@ const SCOPES = 'files.readwrite User.Read offline_access';
 const REDIRECT_URI = chrome.identity.getRedirectURL();
 
 function generateCodeVerifier() {
-  const array = new Uint32Array(32);
+  const array = new Uint8Array(64);
   crypto.getRandomValues(array);
   return btoa(String.fromCharCode(...array))
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
-    .replace(/=+$/, '')
-    .substring(0, 128);
+    .replace(/=+$/, '');
 }
 
 async function sha256(plain) {
