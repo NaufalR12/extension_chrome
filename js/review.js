@@ -710,15 +710,112 @@ document.addEventListener("DOMContentLoaded", () => {
       return s.length > 80 && /^[A-Za-z0-9+/=]+$/.test(s);
     }
 
+    function looksLikeEventStream(text, contentType) {
+      const ct = (contentType || "").toLowerCase();
+      if (ct.includes("event-stream") || ct.includes("eventstream")) return true;
+      
+      const s = String(text || "").trim();
+      if (!s) return false;
+      
+      const lines = s.split("\n");
+      let matchCount = 0;
+      const checkCount = Math.min(lines.length, 10);
+      for (let i = 0; i < checkCount; i++) {
+        const line = lines[i].trim();
+        if (line.startsWith("event:") || line.startsWith("data:") || line.startsWith("id:") || line.startsWith("retry:")) {
+          matchCount++;
+        }
+      }
+      return matchCount >= 1;
+    }
+
+    function renderEventStream(text) {
+      const lines = String(text || "").split("\n");
+      let html = `<div class="event-stream-container" style="font-family: monospace; font-size: 11px; padding: 12px; line-height: 1.5;">`;
+      
+      lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          html += `<div class="event-stream-separator" style="margin-top: 12px; border-top: 1px dashed #ddd; height: 1px;"></div>`;
+          return;
+        }
+        
+        const colonIdx = trimmed.indexOf(":");
+        if (colonIdx === -1) {
+          html += `<div style="color: #666; margin-bottom: 2px;">${escapeHtml(trimmed)}</div>`;
+          return;
+        }
+        
+        const key = trimmed.slice(0, colonIdx).trim();
+        const val = trimmed.slice(colonIdx + 1).trim();
+        const displayKey = key.charAt(0).toUpperCase() + key.slice(1);
+        
+        let valHtml = "";
+        if (val.startsWith("{") || val.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(val);
+            const pretty = JSON.stringify(parsed, null, 2);
+            valHtml = `<pre style="margin: 4px 0 0 0; padding: 8px; background: #fafafa; border: 1px solid #eaeaea; border-radius: 4px; font-family: monospace; font-size: 11px; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; color: #111;">${escapeHtml(pretty)}</pre>`;
+          } catch (e) {
+            valHtml = `<span style="color: #222; font-weight: normal; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(val)}</span>`;
+          }
+        } else {
+          valHtml = `<span style="color: #222; font-weight: normal; white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere;">${escapeHtml(val)}</span>`;
+        }
+        
+        let keyStyle = "font-weight: bold; color: #1a73e8; min-width: 60px; display: inline-block;";
+        if (key.toLowerCase() === "data") {
+          keyStyle = "font-weight: bold; color: #188038; display: block; margin-top: 4px;";
+        } else if (key.toLowerCase() === "event") {
+          keyStyle = "font-weight: bold; color: #b06000; min-width: 60px; display: inline-block;";
+        } else if (key.toLowerCase() === "id") {
+          keyStyle = "font-weight: bold; color: #5f6368; min-width: 60px; display: inline-block;";
+        }
+        
+        if (key.toLowerCase() === "data") {
+          html += `<div style="margin-bottom: 6px;"><span style="${keyStyle}">${displayKey}:</span>${valHtml}</div>`;
+        } else {
+          html += `<div style="margin-bottom: 2px;"><span style="${keyStyle}">${displayKey}:</span> ${valHtml}</div>`;
+        }
+      });
+      
+      html += `</div>`;
+      return html;
+    }
+
     function guessResponseKind(meta) {
       const ct = meta.contentType || "";
-      if (ct.includes("application/json") || ct.includes("+json")) return "json";
-      if (ct.includes("text/html")) return "html";
-      if (ct.startsWith("image/")) return "image";
-      if (ct.includes("xml")) return "xml";
-      if (ct.includes("javascript") || ct.includes("ecmascript")) return "javascript";
-      if (ct.includes("gzip") || ct.includes("application/octet-stream") || ct.includes("binary")) return "binary";
-      if (meta.isBase64 && looksLikeBase64(meta.bodyText)) return "binary";
+      const body = meta.bodyText || "";
+      const trimmed = body.trim();
+
+      if (looksLikeEventStream(body, ct)) {
+        return "event-stream";
+      }
+
+      if (ct.includes("application/json") || ct.includes("+json") || (trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+        return "json";
+      }
+
+      if (ct.includes("text/html") || (trimmed.startsWith("<html") || trimmed.startsWith("<!DOCTYPE html"))) {
+        return "html";
+      }
+
+      if (ct.includes("xml") || trimmed.startsWith("<?xml") || (trimmed.startsWith("<") && trimmed.includes("xmlns="))) {
+        return "xml";
+      }
+
+      if (ct.includes("javascript") || ct.includes("ecmascript")) {
+        return "javascript";
+      }
+
+      if (ct.startsWith("image/")) {
+        return "image";
+      }
+
+      if (ct.includes("gzip") || ct.includes("application/octet-stream") || ct.includes("binary") || (meta.isBase64 && looksLikeBase64(body))) {
+        return "binary";
+      }
+
       return "text";
     }
 
@@ -726,14 +823,21 @@ document.addEventListener("DOMContentLoaded", () => {
       const safe = escapeHtml(text || "");
       if (kind === "html" || kind === "xml") {
         return safe
-          .replace(/(&lt;\/?)([A-Za-z0-9:-]+)/g, '$1<span class="code-token tag-name">$2</span>')
-          .replace(/([A-Za-z0-9:-]+)=(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="code-token attr-name">$1</span>=<span class="code-token attr-value">$2</span>');
+          .replace(/(&lt;\/?)([A-Za-z0-9:-]+)/g, '$1<span class="code-token tag-name" style="color: #c80000; font-weight: bold;">$2</span>')
+          .replace(/([A-Za-z0-9:-]+)=(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="code-token attr-name" style="color: #188038;">$1</span>=<span class="code-token attr-value" style="color: #0f7d3e;">$2</span>');
       }
       if (kind === "javascript") {
         return safe
-          .replace(/\b(const|let|var|function|return|if|else|for|while|try|catch|throw|async|await|new|class|extends|import|from|export)\b/g, '<span class="code-token keyword">$1</span>')
-          .replace(/(&quot;(?:\\.|[^&])*?&quot;|'(?:\\.|[^'])*?')/g, '<span class="code-token string">$1</span>')
-          .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="code-token number">$1</span>');
+          .replace(/\b(const|let|var|function|return|if|else|for|while|try|catch|throw|async|await|new|class|extends|import|from|export)\b/g, '<span class="code-token keyword" style="color: #1a73e8; font-weight: bold;">$1</span>')
+          .replace(/(&quot;(?:\\.|[^&])*?&quot;|'(?:\\.|[^'])*?')/g, '<span class="code-token string" style="color: #0f7d3e;">$1</span>')
+          .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="code-token number" style="color: #1050a0;">$1</span>');
+      }
+      if (kind === "json") {
+        return safe
+          .replace(/(&quot;[^&]*?&quot;)(?=\s*:)/g, '<span class="code-token json-key" style="color: #c80000; font-weight: 600;">$1</span>')
+          .replace(/(:\s*)(&quot;[^&]*?&quot;)/g, '$1<span class="code-token json-string" style="color: #0f7d3e;">$2</span>')
+          .replace(/(:\s*)(\b\d+(?:\.\d+)?\b)/g, '$1<span class="code-token json-number" style="color: #1050a0;">$2</span>')
+          .replace(/(:\s*)(\b(?:true|false|null)\b)/g, '$1<span class="code-token json-boolean" style="color: #b5500e; font-weight: 500;">$2</span>');
       }
       return safe;
     }
@@ -741,7 +845,7 @@ document.addEventListener("DOMContentLoaded", () => {
     function renderCodeBlock(text, kind, title) {
       const safeKind = kind || "text";
       const header = title ? `<div class="detail-section-header">${escapeHtml(title)}</div>` : "";
-      return `<div class="detail-section response-section"><div class="code-block-shell">${header}<pre class="response-code response-code-${safeKind}">${highlightPlainCode(text, safeKind)}</pre></div></div>`;
+      return `<div class="detail-section response-section"><div class="code-block-shell">${header}<pre class="response-code response-code-${safeKind}" style="white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; padding: 12px; background: #f8f9fa; border: 1px solid #eee; border-radius: 4px; font-family: monospace; font-size: 11px; margin: 0; line-height: 1.4;">${highlightPlainCode(text, safeKind)}</pre></div></div>`;
     }
 
     function renderBodySummary(req, label) {
@@ -887,6 +991,11 @@ document.addEventListener("DOMContentLoaded", () => {
         return renderBodySummary(req, `No ${title.toLowerCase()} body captured`);
       }
 
+      if (kind === "event-stream") {
+        const streamHtml = renderEventStream(body);
+        return `<div class="detail-section response-section"><div class="code-block-shell"><div class="detail-section-header">${title} (SSE/Event-Stream)</div>${streamHtml}</div></div>`;
+      }
+
       if (kind === "json") {
         try {
           const parsed = JSON.parse(body);
@@ -908,7 +1017,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (kind === "html") {
-        const frame = `<iframe class="response-html-frame" sandbox="allow-forms allow-scripts allow-same-origin" srcdoc="${escapeHtml(body)}"></iframe>`;
+        const frame = `<iframe class="response-html-frame" sandbox="allow-forms allow-scripts allow-same-origin" srcdoc="${escapeHtml(body)}" style="width: 100%; height: 350px; border: 1px solid #ddd; border-radius: 4px; background: #fff;"></iframe>`;
         if (mode === "preview") {
           return `<div class="response-preview-card">${frame}<div class="response-image-meta">${escapeHtml(meta.mimeType || "text/html")} • ${meta.size} bytes</div></div>`;
         }
