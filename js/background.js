@@ -448,6 +448,69 @@ async function attachCDPToTab(tabId) {
   });
 }
 
+function parseRequestCookies(headers) {
+  const cookies = [];
+  if (!headers) return cookies;
+  let cookieHeader = "";
+  for (const k in headers) {
+    if (k.toLowerCase() === "cookie") {
+      cookieHeader = headers[k];
+      break;
+    }
+  }
+  if (!cookieHeader) return cookies;
+  cookieHeader.split(";").forEach((pair) => {
+    const parts = pair.split("=");
+    if (parts.length >= 1) {
+      const name = parts[0].trim();
+      const value = parts.slice(1).join("=").trim();
+      if (name) {
+        cookies.push({ name, value });
+      }
+    }
+  });
+  return cookies;
+}
+
+function parseResponseCookies(headers) {
+  const cookies = [];
+  const setCookieHeaders = [];
+  if (!headers) return { cookies, setCookieHeaders };
+  let setCookieHeader = "";
+  for (const k in headers) {
+    if (k.toLowerCase() === "set-cookie") {
+      setCookieHeader = headers[k];
+      break;
+    }
+  }
+  if (!setCookieHeader) return { cookies, setCookieHeaders };
+  // CDP joins multiple headers with \n
+  const lines = setCookieHeader.split("\n");
+  lines.forEach((line) => {
+    if (!line.trim()) return;
+    setCookieHeaders.push(line.trim());
+    const parts = line.split(";")[0].split("=");
+    if (parts.length >= 1) {
+      const name = parts[0].trim();
+      const value = parts.slice(1).join("=").trim();
+      // Parse domain/path/etc. from line
+      let domain = "";
+      let path = "";
+      line.split(";").slice(1).forEach((part) => {
+        const kv = part.trim().split("=");
+        const key = kv[0].trim().toLowerCase();
+        const val = kv.slice(1).join("=").trim();
+        if (key === "domain") domain = val;
+        if (key === "path") path = val;
+      });
+      if (name) {
+        cookies.push({ name, value, domain, path });
+      }
+    }
+  });
+  return { cookies, setCookieHeaders };
+}
+
 function handleCdpEvent(debuggeeId, method, params) {
   try {
     if (!debuggeeId || !debuggeeId.tabId) return;
@@ -468,6 +531,7 @@ function handleCdpEvent(debuggeeId, method, params) {
         frameId: r.frameId,
         type: r.type || 'other',
         requestPostData: null, // Will be filled async
+        requestCookies: parseRequestCookies(r.request.headers || {}),
       };
       cdpRequests.set(requestId, entry);
       console.log(`[CDP REQUEST] requestId=${requestId} url=${entry.url} method=${entry.method}`);
@@ -512,6 +576,11 @@ function handleCdpEvent(debuggeeId, method, params) {
           isMonkeyPatched: false,
           fromCDP: true,
           startTimeAbs: Date.now(),
+          initiator: entry.initiator,
+          initiatorType: entry.initiator.type,
+          initiatorUrl: entry.initiator.url,
+          stackTrace: entry.initiator.stack,
+          requestCookies: entry.requestCookies,
         };
         appendLog('NETWORK', logEntry);
         // Mark in cdpRequests that we appended this entry
@@ -521,11 +590,21 @@ function handleCdpEvent(debuggeeId, method, params) {
       const r = params;
       const requestId = r.requestId;
       const existing = cdpRequests.get(requestId) || {};
+      
+      const respCookiesInfo = parseResponseCookies(r.response.headers || {});
+      const timing = r.response.timing || null;
+      const receiveHeadersEnd = timing ? timing.receiveHeadersEnd : null;
+      
       existing.response = {
         status: r.response.status,
         headers: r.response.headers,
         mimeType: r.response.mimeType,
         encoded: r.response.encodedDataLength,
+        responseCookies: respCookiesInfo.cookies,
+        setCookieHeaders: respCookiesInfo.setCookieHeaders,
+        timing: timing,
+        receiveHeadersEnd: receiveHeadersEnd,
+        responseEnd: receiveHeadersEnd, // fallback
       };
       cdpRequests.set(requestId, existing);
       console.log(`[CDP RESPONSE] requestId=${requestId} status=${existing.response.status}`);
@@ -540,6 +619,11 @@ function handleCdpEvent(debuggeeId, method, params) {
             logs.network[logIdx].responseHeaders = maskHeaders(existing.response.headers);
             logs.network[logIdx].mimeType = existing.response.mimeType;
             logs.network[logIdx].size = existing.response.encoded;
+            logs.network[logIdx].responseCookies = existing.response.responseCookies;
+            logs.network[logIdx].setCookieHeaders = existing.response.setCookieHeaders;
+            logs.network[logIdx].timing = existing.response.timing;
+            logs.network[logIdx].receiveHeadersEnd = existing.response.receiveHeadersEnd;
+            logs.network[logIdx].responseEnd = existing.response.responseEnd;
             chrome.storage.local.set({ sessionLogs: logs });
           }
         });
@@ -553,29 +637,38 @@ function handleCdpEvent(debuggeeId, method, params) {
 
       // Try to get response body
       chrome.debugger.sendCommand({ tabId }, 'Network.getResponseBody', { requestId }, (resp) => {
+        let responseBody = null;
         if (chrome.runtime.lastError) {
           console.warn('[CDP] getResponseBody failed', requestId, chrome.runtime.lastError.message);
         } else {
-          const responseBody =
-            resp && typeof resp.body !== 'undefined'
-              ? resp.body
-              : null;
+          responseBody = resp && typeof resp.body !== 'undefined' ? resp.body : null;
           console.log(`[CDP FINISH] requestId=${requestId} hasResponseBody=${!!responseBody}`);
-          
-          // Update existing log entry with response body
-          if (isRecording) {
-            chrome.storage.local.get(['sessionLogs'], (data) => {
-              const logs = data.sessionLogs || { network: [] };
-              const logIdx = logs.network.findIndex(n => n.requestId === requestId);
-              if (logIdx >= 0) {
+        }
+
+        const duration = existing.timestamp 
+          ? Math.round((r.timestamp - existing.timestamp) * 1000)
+          : (existing.startTimeAbs ? Date.now() - existing.startTimeAbs : 0);
+
+        // Update existing log entry with response body and other completion info
+        if (isRecording) {
+          chrome.storage.local.get(['sessionLogs'], (data) => {
+            const logs = data.sessionLogs || { network: [] };
+            const logIdx = logs.network.findIndex(n => n.requestId === requestId);
+            if (logIdx >= 0) {
+              if (responseBody !== null) {
                 logs.network[logIdx].responseBody = responseBody;
-                logs.network[logIdx].status = existing.response ? existing.response.status : 200;
-                logs.network[logIdx].isStatic = isStaticResourceType(logs.network[logIdx].type);
-                logs.network[logIdx].fromCache = r.encodedDataLength === 0;
-                chrome.storage.local.set({ sessionLogs: logs });
               }
-            });
-          }
+              logs.network[logIdx].status = existing.response ? existing.response.status : 200;
+              logs.network[logIdx].isStatic = isStaticResourceType(logs.network[logIdx].type);
+              logs.network[logIdx].fromCache = r.encodedDataLength === 0;
+              logs.network[logIdx].duration = duration;
+              logs.network[logIdx].encodedDataLength = r.encodedDataLength;
+              if (!logs.network[logIdx].size || logs.network[logIdx].size === 0) {
+                logs.network[logIdx].size = r.encodedDataLength;
+              }
+              chrome.storage.local.set({ sessionLogs: logs });
+            }
+          });
         }
 
         // Cleanup request mapping to avoid memory growth

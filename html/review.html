@@ -223,19 +223,20 @@
                 <div id="networkDetailsPanel" class="network-side-panel">
                   <div class="details-header">
                     <button id="closeDetails" class="close-panel-btn">&times;</button>
-                    <div class="d-tabs">
-                      <div class="d-tab active" data-dtool="headers">Headers</div>
-                      <div class="d-tab" data-dtool="payload">Payload</div>
-                      <div class="d-tab" data-dtool="response">Response</div>
+                    <div class="d-tabs" id="networkDynamicTabs">
                     </div>
                     <div class="flex gap-2 ml-auto" style="padding-right: 15px;">
                       <button class="pill-sm" id="btnCurlNet">Copy as cURL (bash)</button>
                     </div>
                   </div>
                   <div class="details-body">
-                    <div id="detailsHeaders" class="d-list active"></div>
+                    <div id="detailsHeaders" class="d-panel active"></div>
                     <div id="detailsPayload" class="d-panel"></div>
                     <div id="detailsResponse" class="d-panel"></div>
+                    <div id="detailsPreview" class="d-panel"></div>
+                    <div id="detailsCookies" class="d-panel"></div>
+                    <div id="detailsTiming" class="d-panel"></div>
+                    <div id="detailsInitiator" class="d-panel"></div>
                   </div>
                 </div>
               </div>

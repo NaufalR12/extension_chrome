@@ -664,35 +664,300 @@ document.addEventListener("DOMContentLoaded", () => {
     // Detail Panel Logic
     const panel = document.getElementById("networkDetailsPanel");
     const closeBtn = document.getElementById("closeDetails");
-    const dTabs = document.querySelectorAll(".d-tab");
     const dPanels = document.querySelectorAll(".d-panel");
     const dList = document.getElementById("detailsHeaders");
+
+    function getHeaderValue(headers, name) {
+      if (!headers) return "";
+      const target = String(name || "").toLowerCase();
+      for (const key in headers) {
+        if (String(key).toLowerCase() === target) return headers[key];
+      }
+      return "";
+    }
+
+    function getResponseBodyText(req) {
+      if (!req) return "";
+      if (req.responseBody !== undefined && req.responseBody !== null) return String(req.responseBody);
+      if (req.responseText !== undefined && req.responseText !== null) return String(req.responseText);
+      if (req.body !== undefined && req.body !== null) return String(req.body);
+      return "";
+    }
+
+    function getResponseMeta(req) {
+      const responseHeaders = (req && req.responseHeaders) || {};
+      const requestHeaders = (req && req.requestHeaders) || {};
+      const contentType = String(
+        req && (req.mimeType || getHeaderValue(responseHeaders, "content-type") || getHeaderValue(requestHeaders, "content-type") || "")
+      ).toLowerCase();
+      const contentEncoding = String(getHeaderValue(responseHeaders, "content-encoding") || getHeaderValue(requestHeaders, "content-encoding") || "").toLowerCase();
+      const bodyText = getResponseBodyText(req);
+      const trimmed = bodyText.trim();
+      const size = Number(req && (req.encodedDataLength || req.size || bodyText.length || 0)) || 0;
+      return {
+        contentType,
+        contentEncoding,
+        bodyText,
+        trimmed,
+        size,
+        mimeType: String((req && req.mimeType) || contentType || ""),
+        isBase64: !!(req && (req.responseBodyBase64Encoded || req.responseBase64Encoded)),
+      };
+    }
+
+    function looksLikeBase64(text) {
+      const s = String(text || "").replace(/\s+/g, "");
+      return s.length > 80 && /^[A-Za-z0-9+/=]+$/.test(s);
+    }
+
+    function guessResponseKind(meta) {
+      const ct = meta.contentType || "";
+      if (ct.includes("application/json") || ct.includes("+json")) return "json";
+      if (ct.includes("text/html")) return "html";
+      if (ct.startsWith("image/")) return "image";
+      if (ct.includes("xml")) return "xml";
+      if (ct.includes("javascript") || ct.includes("ecmascript")) return "javascript";
+      if (ct.includes("gzip") || ct.includes("application/octet-stream") || ct.includes("binary")) return "binary";
+      if (meta.isBase64 && looksLikeBase64(meta.bodyText)) return "binary";
+      return "text";
+    }
+
+    function highlightPlainCode(text, kind) {
+      const safe = escapeHtml(text || "");
+      if (kind === "html" || kind === "xml") {
+        return safe
+          .replace(/(&lt;\/?)([A-Za-z0-9:-]+)/g, '$1<span class="code-token tag-name">$2</span>')
+          .replace(/([A-Za-z0-9:-]+)=(&quot;.*?&quot;|&#39;.*?&#39;)/g, '<span class="code-token attr-name">$1</span>=<span class="code-token attr-value">$2</span>');
+      }
+      if (kind === "javascript") {
+        return safe
+          .replace(/\b(const|let|var|function|return|if|else|for|while|try|catch|throw|async|await|new|class|extends|import|from|export)\b/g, '<span class="code-token keyword">$1</span>')
+          .replace(/(&quot;(?:\\.|[^&])*?&quot;|'(?:\\.|[^'])*?')/g, '<span class="code-token string">$1</span>')
+          .replace(/\b(\d+(?:\.\d+)?)\b/g, '<span class="code-token number">$1</span>');
+      }
+      return safe;
+    }
+
+    function renderCodeBlock(text, kind, title) {
+      const safeKind = kind || "text";
+      const header = title ? `<div class="detail-section-header">${escapeHtml(title)}</div>` : "";
+      return `<div class="detail-section response-section"><div class="code-block-shell">${header}<pre class="response-code response-code-${safeKind}">${highlightPlainCode(text, safeKind)}</pre></div></div>`;
+    }
+
+    function renderBodySummary(req, label) {
+      const meta = getResponseMeta(req);
+      const mime = meta.mimeType ? escapeHtml(meta.mimeType) : "(unknown)";
+      const encoding = meta.contentEncoding ? ` • ${escapeHtml(meta.contentEncoding)}` : "";
+      return `<div class="response-empty-state"><div class="response-empty-title">${escapeHtml(label || "No response captured")}</div><div class="response-empty-meta">${mime}${encoding ? ` • ${encoding}` : ""} • ${meta.size} bytes</div></div>`;
+    }
+
+    function renderCookieRows(items, emptyLabel) {
+      const list = Array.isArray(items) ? items : [];
+      if (!list.length) return `<div class="response-empty-state"><div class="response-empty-title">${escapeHtml(emptyLabel || "No cookies captured")}</div></div>`;
+      const rows = list.map((item) => {
+        if (typeof item === "string") {
+          return `<div class="detail-item"><div class="detail-label">Cookie</div><div class="detail-value">${escapeHtml(item)}</div></div>`;
+        }
+        const cookie = item.cookie || item;
+        const name = cookie.name || item.name || "(unnamed)";
+        const value = cookie.value || item.value || "";
+        const domain = cookie.domain || item.domain || "";
+        const path = cookie.path || item.path || "";
+        const reasons = item.blockedReasons || item.reasons || [];
+        const meta = [domain, path ? `path=${path}` : "", reasons.length ? `blocked: ${reasons.join(", ")}` : ""].filter(Boolean).join(" • ");
+        return `<div class="detail-item"><div class="detail-label">${escapeHtml(name)}</div><div class="detail-value"><div>${escapeHtml(value || "")}</div>${meta ? `<div class="response-cookie-meta">${escapeHtml(meta)}</div>` : ""}</div></div>`;
+      }).join("");
+      return `<div class="detail-section">${rows}</div>`;
+    }
+
+    function renderCookiesPanel(req) {
+      const requestCookies = (req.requestCookies && req.requestCookies.length > 0)
+        ? req.requestCookies
+        : (req.requestCookieHeader ? [req.requestCookieHeader] : (req.associatedCookies || []));
+      const responseCookies = req.responseCookies || req.setCookieHeaders || [];
+      const blockedCookies = req.blockedCookies || [];
+      return `
+        <div class="detail-section">
+          <div class="detail-section-header">Request Cookies</div>
+          ${renderCookieRows(requestCookies, "No request cookies captured")}
+        </div>
+        <div class="detail-section">
+          <div class="detail-section-header">Response Cookies</div>
+          ${renderCookieRows(responseCookies, "No response cookies captured")}
+        </div>
+        <div class="detail-section">
+          <div class="detail-section-header">Blocked / Filtered Cookies</div>
+          ${renderCookieRows(blockedCookies, "No blocked cookies captured")}
+        </div>`;
+    }
+
+    function renderTimingPanel(req) {
+      const timing = req.timing || {};
+      const duration = req.duration != null ? `${req.duration} ms` : "-";
+      const responseEnd = timing.receiveHeadersEnd != null ? `${Math.round(timing.receiveHeadersEnd)} ms` : (req.responseEnd != null ? `${req.responseEnd} ms` : duration);
+      const ttfb = timing.receiveHeadersEnd != null ? `${Math.round(timing.receiveHeadersEnd)} ms` : (req.ttfb != null ? `${req.ttfb} ms` : "-");
+      const startTime = req.startTimeAbs != null ? new Date(req.startTimeAbs).toLocaleTimeString() : (req.relativeMs != null ? `${req.relativeMs} ms` : "-");
+      return `
+        <div class="detail-section">
+          <div class="detail-section-header">Timing</div>
+          <div class="detail-item"><div class="detail-label">startTime</div><div class="detail-value">${escapeHtml(String(startTime))}</div></div>
+          <div class="detail-item"><div class="detail-label">duration</div><div class="detail-value">${escapeHtml(String(duration))}</div></div>
+          <div class="detail-item"><div class="detail-label">responseEnd</div><div class="detail-value">${escapeHtml(String(responseEnd))}</div></div>
+          <div class="detail-item"><div class="detail-label">TTFB</div><div class="detail-value">${escapeHtml(String(ttfb))}</div></div>
+        </div>`;
+    }
+
+    function renderInitiatorPanel(req) {
+      const initiator = req.initiator || {};
+      const type = initiator.type || req.initiatorType || req.type || "unknown";
+      const url = initiator.url || req.initiatorUrl || "";
+      const lineNumber = initiator.lineNumber != null ? initiator.lineNumber : "";
+      const columnNumber = initiator.columnNumber != null ? initiator.columnNumber : "";
+      const stack = initiator.stack || initiator.stackTrace || null;
+      let html = `
+        <div class="detail-section">
+          <div class="detail-section-header">Initiator</div>
+          <div class="detail-item"><div class="detail-label">type</div><div class="detail-value">${escapeHtml(String(type))}</div></div>
+          <div class="detail-item"><div class="detail-label">url</div><div class="detail-value">${url ? escapeHtml(String(url)) : "-"}</div></div>
+          <div class="detail-item"><div class="detail-label">line</div><div class="detail-value">${lineNumber !== "" ? escapeHtml(String(lineNumber)) : "-"}</div></div>
+          <div class="detail-item"><div class="detail-label">column</div><div class="detail-value">${columnNumber !== "" ? escapeHtml(String(columnNumber)) : "-"}</div></div>
+        </div>`;
+      if (stack && stack.callFrames && stack.callFrames.length) {
+        const frames = stack.callFrames.map((frame) => `<div class="initiator-frame"><span class="initiator-frame-url">${escapeHtml(frame.url || "")}</span><span class="initiator-frame-line">${frame.lineNumber != null ? frame.lineNumber : "-"}:${frame.columnNumber != null ? frame.columnNumber : "-"}</span></div>`).join("");
+        html += `<div class="detail-section"><div class="detail-section-header">Stack Trace</div>${frames}</div>`;
+      }
+      return html;
+    }
+
+    function hasResponse(req) {
+      return !!(
+        req?.responseBody ||
+        req?.responseText ||
+        req?.body
+      );
+    }
+
+    function hasPreview(req) {
+      return hasResponse(req);
+    }
+
+    function hasCookies(req) {
+      return (
+        (req?.requestCookies?.length || 0) > 0 ||
+        (req?.responseCookies?.length || 0) > 0 ||
+        (req?.blockedCookies?.length || 0) > 0
+      );
+    }
+
+    function hasTiming(req) {
+      return !!(
+        req?.duration ||
+        req?.timing
+      );
+    }
+
+    function hasInitiator(req) {
+      return !!(
+        req?.initiator ||
+        req?.initiatorType
+      );
+    }
+
+    function renderResponseBody(req, mode) {
+      const meta = getResponseMeta(req);
+      const kind = guessResponseKind(meta);
+      const body = meta.bodyText;
+      const hasBody = !!body.trim();
+      const title = mode === "preview" ? "Preview" : "Response";
+
+      if (!hasBody) {
+        return renderBodySummary(req, `No ${title.toLowerCase()} body captured`);
+      }
+
+      if (kind === "json") {
+        try {
+          const parsed = JSON.parse(body);
+          const pretty = JSON.stringify(parsed, null, 2);
+          const tree = `<div class="response-tree">${renderJsonTree(parsed)}</div>`;
+          const code = renderCodeBlock(pretty, "json", "Pretty JSON");
+          return mode === "preview" ? tree : `<div class="response-stack">${tree}${code}</div>`;
+        } catch (err) {
+          return renderCodeBlock(body, "text", title);
+        }
+      }
+
+      if (kind === "image") {
+        const src = meta.isBase64 || looksLikeBase64(body) ? `data:${meta.mimeType || "image/png"};base64,${body.replace(/\s+/g, "")}` : body;
+        if (mode === "preview") {
+          return `<div class="response-preview-card"><img class="response-image" alt="Response image preview" src="${escapeHtml(src)}"><div class="response-image-meta">${escapeHtml(meta.mimeType || "image")}${meta.contentEncoding ? ` • ${escapeHtml(meta.contentEncoding)}` : ""} • ${meta.size} bytes</div></div>`;
+        }
+        return `<div class="response-stack"><div class="response-preview-card"><img class="response-image" alt="Response image preview" src="${escapeHtml(src)}"></div>${renderBodySummary(req, "Image response")}</div>`;
+      }
+
+      if (kind === "html") {
+        const frame = `<iframe class="response-html-frame" sandbox="allow-forms allow-scripts allow-same-origin" srcdoc="${escapeHtml(body)}"></iframe>`;
+        if (mode === "preview") {
+          return `<div class="response-preview-card">${frame}<div class="response-image-meta">${escapeHtml(meta.mimeType || "text/html")} • ${meta.size} bytes</div></div>`;
+        }
+        return `<div class="response-stack">${frame}${renderCodeBlock(body, "html", "HTML Source")}</div>`;
+      }
+
+      if (kind === "xml") {
+        return mode === "preview" ? renderCodeBlock(body, "xml", "XML Preview") : renderCodeBlock(body, "xml", "Response Body");
+      }
+
+      if (kind === "javascript") {
+        return mode === "preview" ? renderCodeBlock(body, "javascript", "JavaScript Preview") : renderCodeBlock(body, "javascript", "Response Body");
+      }
+
+      if (kind === "binary") {
+        return renderBodySummary(req, `Binary response${meta.contentEncoding ? ` (${meta.contentEncoding})` : ""}`);
+      }
+
+      return renderCodeBlock(body, "text", title);
+    }
 
     function showDetails(req) {
       if (!req) return;
       const networkTab = document.getElementById("tabNetwork");
       networkTab.classList.add("detail-open");
-      // Dynamically show/hide Payload and Response tabs based on available data
-      const tabPayload = document.querySelector('.d-tab[data-dtool="payload"]');
-      const tabResponse = document.querySelector('.d-tab[data-dtool="response"]');
-      const pCont = document.getElementById('detailsPayload');
-      const rCont = document.getElementById('detailsResponse');
+
+      // Generate dynamic tabs
+      let tabsHtml = `<div class="d-tab active" data-dtool="headers">Headers</div>`;
 
       const hasPayload = !req.isStatic && (!!req.payloadText || !!req.requestBody || (req.parsedPayload && Object.keys(req.parsedPayload || {}).length > 0));
-      const hasResponse = !req.isStatic && !!(req.responseBody && String(req.responseBody).length > 0);
+      if (hasPayload) {
+        tabsHtml += `<div class="d-tab" data-dtool="payload">Payload</div>`;
+      }
 
-      if (tabPayload) tabPayload.style.display = hasPayload ? '' : 'none';
-      if (tabResponse) tabResponse.style.display = hasResponse ? '' : 'none';
+      tabsHtml += `<div class="d-tab" data-dtool="response">Response</div>`;
 
-      // Hide panel contents if not present
-      if (pCont) pCont.style.display = hasPayload ? '' : 'none';
-      if (rCont) rCont.style.display = hasResponse ? '' : 'none';
+      if (hasPreview(req)) {
+        tabsHtml += `<div class="d-tab" data-dtool="preview">Preview</div>`;
+      }
 
-      // Ensure Headers tab is active by default
-      dTabs.forEach((t) => t.classList.remove('active'));
-      dPanels.forEach((p) => p.classList.remove('active'));
-      document.querySelector('.d-tab[data-dtool="headers"]').classList.add('active');
-      dList.classList.add('active');
+      if (hasCookies(req)) {
+        tabsHtml += `<div class="d-tab" data-dtool="cookies">Cookies</div>`;
+      }
+
+      if (hasTiming(req)) {
+        tabsHtml += `<div class="d-tab" data-dtool="timing">Timing</div>`;
+      }
+
+      if (hasInitiator(req)) {
+        tabsHtml += `<div class="d-tab" data-dtool="initiator">Initiator</div>`;
+      }
+
+      const dynamicTabsContainer = document.getElementById("networkDynamicTabs");
+      if (dynamicTabsContainer) {
+        dynamicTabsContainer.innerHTML = tabsHtml;
+      }
+
+      // Hide all panels, activate headers
+      const dPanelsLocal = document.querySelectorAll(".details-body .d-panel");
+      dPanelsLocal.forEach((p) => p.classList.remove('active'));
+      const hPanel = document.getElementById("detailsHeaders");
+      if (hPanel) hPanel.classList.add('active');
 
       renderDetailTab("headers", req);
     }
@@ -705,28 +970,40 @@ document.addEventListener("DOMContentLoaded", () => {
       renderNetwork();
     });
 
-    dTabs.forEach((t) => {
-      t.addEventListener("click", () => {
-        dTabs.forEach((i) => i.classList.remove("active"));
-        dPanels.forEach((i) => i.classList.remove("active"));
-        dList.classList.remove("active");
+    // Event Delegation for Dynamic Tabs
+    const dynamicTabsContainer = document.getElementById("networkDynamicTabs");
+    if (dynamicTabsContainer) {
+      dynamicTabsContainer.addEventListener("click", (e) => {
+        const t = e.target.closest(".d-tab");
+        if (!t) return;
+
+        // Remove active from all tabs inside container
+        dynamicTabsContainer.querySelectorAll(".d-tab").forEach(i => i.classList.remove("active"));
+
+        // Remove active from all panels
+        document.querySelectorAll(".details-body .d-panel").forEach(i => i.classList.remove("active"));
+
         t.classList.add("active");
         const tool = t.getAttribute("data-dtool");
-        if (tool === "headers") dList.classList.add("active");
-        else
-          document
-            .getElementById(
-              "details" + tool.charAt(0).toUpperCase() + tool.slice(1),
-            )
-            .classList.add("active");
+
+        const panelId = "details" + tool.charAt(0).toUpperCase() + tool.slice(1);
+        const panelEl = document.getElementById(panelId);
+        if (panelEl) {
+          panelEl.classList.add("active");
+        }
+
         if (selectedReq) renderDetailTab(tool, selectedReq);
       });
-    });
+    }
 
     function renderDetailTab(tab, req) {
       const dList = document.getElementById("detailsHeaders");
       const pCont = document.getElementById("detailsPayload");
       const rCont = document.getElementById("detailsResponse");
+      const prevCont = document.getElementById("detailsPreview");
+      const cCont = document.getElementById("detailsCookies");
+      const tCont = document.getElementById("detailsTiming");
+      const iCont = document.getElementById("detailsInitiator");
 
       if (tab === "headers") {
         let html = `
@@ -735,6 +1012,9 @@ document.addEventListener("DOMContentLoaded", () => {
             <div class="detail-item"><div class="detail-label">Request URL:</div><div class="detail-value">${req.url}</div></div>
             <div class="detail-item"><div class="detail-label">Request Method:</div><div class="detail-value">${req.method}</div></div>
             <div class="detail-item"><div class="detail-label">Status Code:</div><div class="detail-value status-200">${req.status || "200"}</div></div>
+            <div class="detail-item"><div class="detail-label">MIME Type:</div><div class="detail-value">${escapeHtml(String(req.mimeType || getHeaderValue(req.responseHeaders, "content-type") || getHeaderValue(req.requestHeaders, "content-type") || "-"))}</div></div>
+            <div class="detail-item"><div class="detail-label">Size:</div><div class="detail-value">${req.size != null ? formatSize(req.size) : "-"}</div></div>
+            <div class="detail-item"><div class="detail-label">Duration:</div><div class="detail-value">${req.duration != null ? `${req.duration}ms` : "-"}</div></div>
           </div>`;
 
         if (req.responseHeaders) {
@@ -754,21 +1034,38 @@ document.addEventListener("DOMContentLoaded", () => {
           }
           html += `</div>`;
         }
-        dList.innerHTML = html;
+        if (dList) dList.innerHTML = html;
       } else if (tab === "payload") {
-        if (req.isStatic) {
-          pCont.innerHTML = '<div class="p-4 text-gray-500">Not available for static resources</div>';
-        } else {
-          pCont.innerHTML = renderPrettyPayload(req);
+        if (pCont) {
+          if (req.isStatic) {
+            pCont.innerHTML = '<div class="p-4 text-gray-500">Not available for static resources</div>';
+          } else {
+            pCont.innerHTML = renderPrettyPayload(req);
+          }
         }
       } else if (tab === "response") {
-        if (req.isStatic) {
-          rCont.innerHTML = '<div class="p-4 text-gray-500">Not available for static resources</div>';
-        } else {
-          const respBody = req.responseBody || '';
-          rCont.innerHTML = respBody 
-            ? `<pre style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:11px;font-family:monospace;white-space:pre-wrap;overflow-x:auto;">${escapeHtml(respBody)}</pre>`
-            : '<div style="padding:16px;background:#f8f9fa;border-radius:4px;font-size:12px;color:#666;">(No response captured)</div>';
+        if (rCont) {
+          if (req.isStatic) {
+            rCont.innerHTML = '<div class="p-4 text-gray-500">Not available for static resources</div>';
+          } else {
+            rCont.innerHTML = renderResponseBody(req, "response");
+          }
+        }
+      } else if (tab === "preview") {
+        if (prevCont) {
+          prevCont.innerHTML = renderResponseBody(req, "preview");
+        }
+      } else if (tab === "cookies") {
+        if (cCont) {
+          cCont.innerHTML = renderCookiesPanel(req);
+        }
+      } else if (tab === "timing") {
+        if (tCont) {
+          tCont.innerHTML = renderTimingPanel(req);
+        }
+      } else if (tab === "initiator") {
+        if (iCont) {
+          iCont.innerHTML = renderInitiatorPanel(req);
         }
       }
     }
