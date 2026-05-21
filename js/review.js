@@ -2335,7 +2335,9 @@ document.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => {
       btnCopy.textContent = ogText;
     }, 2000);
+  });
 });
+
 
 async function makeFilePublicAndGetDirectUrl(token, fileId) {
   const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
