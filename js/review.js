@@ -830,11 +830,24 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function hasResponse(req) {
-      return !!(
+      const body =
         req?.responseBody ||
         req?.responseText ||
-        req?.body
-      );
+        req?.body ||
+        '';
+
+      const text = String(body).trim();
+
+      // Jangan tampilkan response kalau cuma placeholder
+      if (
+        !text ||
+        text === '(Beacon Sent)' ||
+        text === 'No response body captured'
+      ) {
+        return false;
+      }
+
+      return true;
     }
 
     function hasPreview(req) {
@@ -930,7 +943,13 @@ document.addEventListener("DOMContentLoaded", () => {
         tabsHtml += `<div class="d-tab" data-dtool="payload">Payload</div>`;
       }
 
-      tabsHtml += `<div class="d-tab" data-dtool="response">Response</div>`;
+      if (hasResponse(req)) {
+        tabsHtml += `
+          <div class="d-tab" data-dtool="response">
+            Response
+          </div>
+        `;
+      }
 
       if (hasPreview(req)) {
         tabsHtml += `<div class="d-tab" data-dtool="preview">Preview</div>`;
