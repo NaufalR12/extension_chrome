@@ -178,26 +178,80 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  async function getSharingLink(fileId) {
+  async function getOrCreateDirectUrl(fileId) {
     const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
-    const res = await fetch(url, {
+    
+    // Try to create an embed link first (works best for OneDrive Personal direct downloads)
+    let res = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${authToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        type: "view",
+        type: "embed",
         scope: "anonymous"
       })
     });
-    if (!res.ok) throw new Error("Failed to get sharing link: " + res.status);
-    const data = await res.json();
-    return data.link.webUrl;
-  }
 
-  async function getOrCreateDirectUrl(fileId) {
-    const sharingLink = await getSharingLink(fileId);
+    if (!res.ok) {
+      // Fallback to "view" if "embed" fails
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          type: "view",
+          scope: "anonymous"
+        })
+      });
+      if (!res.ok) throw new Error("Failed to get sharing link: " + res.status);
+    }
+
+    const data = await res.json();
+    let sharingLink = data.link.webUrl;
+    
+    // For embed type, Graph API usually returns an iframe in webHtml
+    if (data.link && data.link.webHtml) {
+      const srcMatch = data.link.webHtml.match(/src="([^"]+)"/);
+      if (srcMatch && srcMatch[1]) {
+        sharingLink = srcMatch[1];
+      }
+    }
+
+    // If we successfully got an embed link, convert it to a direct download link
+    if (sharingLink && sharingLink.includes("embed?")) {
+      return sharingLink.replace("embed?", "download?");
+    }
+
+    // Resolve 1drv.ms shortened link to expanded onedrive.live.com URL
+    if (sharingLink && sharingLink.includes("1drv.ms")) {
+      try {
+        let resolveRes = await fetch(sharingLink, {
+          method: "HEAD",
+          redirect: "follow",
+          credentials: "omit"
+        });
+        if (!resolveRes.ok) {
+          resolveRes = await fetch(sharingLink, {
+            method: "GET",
+            redirect: "follow",
+            credentials: "omit"
+          });
+        }
+        sharingLink = resolveRes.url;
+      } catch (e) {
+        console.warn("Failed to resolve 1drv.ms link:", e);
+      }
+    }
+
+    // Check again in case the resolved URL is an embed link
+    if (sharingLink && sharingLink.includes("embed?")) {
+      return sharingLink.replace("embed?", "download?");
+    }
+
     const base64Value = btoa(sharingLink);
     const safeBase64Value = base64Value
       .replace(/=/g, '')
