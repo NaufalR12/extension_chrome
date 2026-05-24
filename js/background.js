@@ -1,4 +1,5 @@
 import { getAccessToken, login } from './auth.js';
+import { encryptPayloadForProxy } from './crypto.js';
 
 let isRecording = false;
 let recordingStartTime = null;
@@ -2015,8 +2016,16 @@ async function commitUpload(title, desc, folderLink, tcName, scenarioNum, status
     driveId
   );
 
-  const videoDirectUrl = await makeFilePublicAndGetDirectUrl(token, videoFileId, driveId);
-  const jsonDirectUrl = await makeFilePublicAndGetDirectUrl(token, jsonFileId, driveId);
+  const rTData = await chrome.storage.local.get(['msRefreshToken']);
+  const refreshToken = rTData.msRefreshToken;
+
+  const payloadObj = {
+    rt: refreshToken,
+    vId: videoFileId,
+    jId: jsonFileId
+  };
+
+  const payloadString = await encryptPayloadForProxy(payloadObj);
 
   resetLogs();
   pendingVideoBase64 = null;
@@ -2024,7 +2033,7 @@ async function commitUpload(title, desc, folderLink, tcName, scenarioNum, status
   await clearVideoFromDB();
 
   // Return Hosted Player Web App URL with direct URLs
-  return `https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(videoDirectUrl)}&lUrl=${encodeURIComponent(jsonDirectUrl)}`;
+  return `https://dynamic-rabanadas-2b5f0b.netlify.app/?payload=${encodeURIComponent(payloadString)}`;
 }
 
 async function getVideoFromDB() {
