@@ -2144,13 +2144,28 @@ document.addEventListener("DOMContentLoaded", () => {
   btnSave.addEventListener("click", async () => {
     const title = inputTitle.value.trim();
     const desc = inputDesc.value.trim();
+    const folderLink = document.getElementById('inputFolderLink').value.trim();
+    const tcName = document.getElementById('inputTC').value.trim();
+    const scenarioNum = document.getElementById('inputScenario').value.trim();
+    const statusBug = document.getElementById('inputStatus').value;
 
-    if (!title) {
-      inputTitle.style.borderColor = "red";
-      return;
+    let hasError = false;
+    if (!tcName) {
+      document.getElementById('inputTC').style.borderColor = "red";
+      hasError = true;
+    } else {
+      document.getElementById('inputTC').style.borderColor = "#ccc";
     }
 
-    inputTitle.style.borderColor = "#ccc";
+    if (!scenarioNum) {
+      document.getElementById('inputScenario').style.borderColor = "red";
+      hasError = true;
+    } else {
+      document.getElementById('inputScenario').style.borderColor = "#ccc";
+    }
+
+    if (hasError) return;
+
     btnSave.disabled = true;
     loading.classList.remove("hidden");
     errorMsg.classList.add("hidden");
@@ -2190,16 +2205,18 @@ document.addEventListener("DOMContentLoaded", () => {
         const timeStampPart =
           parts.length >= 3
             ? parts[parts.length - 1].split(".")[0]
-            : new Date().toISOString().replace(/[:.]/g, "-");
+            : new Date().toISOString().split("T")[0];
 
-        // Prepare new sanitized names
-        const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, "_");
-        const newJsonName = `BERIBUG_${sanitizedTitle}_${timeStampPart}.json`;
-        const newVideoName = `BERIBUG_${sanitizedTitle}_${timeStampPart}.webm`;
+        // Prepare new sanitized names based on new format: [Scenario]_[Date]_[Status]
+        const newJsonName = `${scenarioNum}_${timeStampPart}_${statusBug}.json`;
+        const newVideoName = `${scenarioNum}_${timeStampPart}_${statusBug}.webm`;
 
         // 2. Update JSON content
         fullData.title = title;
         fullData.description = desc;
+        fullData.tcName = tcName;
+        fullData.scenarioNum = scenarioNum;
+        fullData.statusBug = statusBug;
         if (fullData.metadata)
           fullData.metadata.lastUpdated = new Date().toISOString();
 
@@ -2285,6 +2302,10 @@ document.addEventListener("DOMContentLoaded", () => {
           action: "COMMIT_UPLOAD",
           title: title,
           description: desc,
+          folderLink: folderLink,
+          tcName: tcName,
+          scenarioNum: scenarioNum,
+          statusBug: statusBug,
           info: {
             browser: document.getElementById("infoBrowser").textContent,
             os: document.getElementById("infoOS").textContent,

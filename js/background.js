@@ -1641,6 +1641,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     commitUpload(
       request.title,
       request.description,
+      request.folderLink,
+      request.tcName,
+      request.scenarioNum,
+      request.statusBug,
       pendingVideoBase64,
       request.info,
     )
@@ -1859,7 +1863,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-async function commitUpload(title, desc, videoBase64, infoData) {
+async function commitUpload(title, desc, folderLink, tcName, scenarioNum, statusBug, videoBase64, infoData) {
   const data = await chrome.storage.local.get(["sessionLogs"]);
   let logsData = data.sessionLogs || {};
 
@@ -1914,7 +1918,36 @@ async function commitUpload(title, desc, videoBase64, infoData) {
 
   if (!token) throw new Error("Could not authenticate with OneDrive");
 
-  const folderId = await getOrCreateFolder(token, "BERIBUG_Reports_App");
+  let driveId = null;
+  let targetFolderId = null;
+
+  if (folderLink) {
+    const linkData = await getFolderIdFromLink(token, folderLink);
+    if (linkData) {
+      driveId = linkData.driveId;
+      targetFolderId = linkData.id;
+    } else {
+      throw new Error("Gagal mengakses Folder Share Link yang diberikan.");
+    }
+  } else {
+    targetFolderId = await getOrCreateFolder(token, "BERIBUG_Reports_App");
+  }
+
+  // Create tcName and scenarioNum folders if provided
+  let currentFolderId = targetFolderId;
+  if (tcName) {
+    currentFolderId = await getOrCreateSubFolder(token, driveId, currentFolderId, tcName);
+  }
+  if (scenarioNum) {
+    currentFolderId = await getOrCreateSubFolder(token, driveId, currentFolderId, scenarioNum);
+  }
+
+  // Base names using User Request format: [Scenario]_[Date]_[Status]
+  const timeStamp = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  const baseName = `${scenarioNum}_${timeStamp}_${statusBug}`;
+  
+  const videoFileName = await getUniqueFilename(token, driveId, currentFolderId, `${baseName}.webm`);
+  const jsonFileName = await getUniqueFilename(token, driveId, currentFolderId, `${baseName}.json`);
 
   const jsonBlob = new Blob(
     [
@@ -1923,6 +1956,9 @@ async function commitUpload(title, desc, videoBase64, infoData) {
           version: "1.0",
           title: title,
           description: desc,
+          tcName: tcName,
+          scenarioNum: scenarioNum,
+          statusBug: statusBug,
           metadata: {
             date: new Date().toISOString(),
           },
@@ -1962,26 +1998,25 @@ async function commitUpload(title, desc, videoBase64, infoData) {
     throw new Error("Failed to prepare video blob for upload: " + err.message);
   }
 
-  const timeStamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, "_");
-
   const videoFileId = await uploadFileToOneDrive(
     token,
-    `BERIBUG_${sanitizedTitle}_${timeStamp}.webm`,
+    videoFileName,
     "video/webm",
     videoBlob,
-    folderId,
+    currentFolderId,
+    driveId
   );
   const jsonFileId = await uploadFileToOneDrive(
     token,
-    `BERIBUG_${sanitizedTitle}_${timeStamp}.json`,
+    jsonFileName,
     "application/json",
     jsonBlob,
-    folderId,
+    currentFolderId,
+    driveId
   );
 
-  const videoDirectUrl = await makeFilePublicAndGetDirectUrl(token, videoFileId);
-  const jsonDirectUrl = await makeFilePublicAndGetDirectUrl(token, jsonFileId);
+  const videoDirectUrl = await makeFilePublicAndGetDirectUrl(token, videoFileId, driveId);
+  const jsonDirectUrl = await makeFilePublicAndGetDirectUrl(token, jsonFileId, driveId);
 
   resetLogs();
   pendingVideoBase64 = null;
@@ -2105,16 +2140,115 @@ async function getOrCreateFolder(token, folderName) {
   return data.id;
 }
 
-async function uploadFileToOneDrive(token, filename, mimeType, fileBlob, folderId) {
-  if (fileBlob.size < 4 * 1024 * 1024) {
-    return await uploadSmallFile(token, folderId, filename, mimeType, fileBlob);
-  } else {
-    return await uploadLargeFile(token, folderId, filename, mimeType, fileBlob);
+async function getFolderIdFromLink(token, link) {
+  try {
+    const base64Value = btoa(link)
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+    
+    const res = await fetch(`https://graph.microsoft.com/v1.0/shares/u!${base64Value}/driveItem`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { id: data.id, driveId: data.parentReference.driveId };
+    }
+  } catch (e) {
+    console.error("Failed to parse/resolve folder link", e);
+  }
+  return null;
+}
+
+async function getOrCreateSubFolder(token, driveId, parentId, folderName) {
+  const checkUrl = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${parentId}:/${encodeURIComponent(folderName)}`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${parentId}:/${encodeURIComponent(folderName)}`;
+    
+  try {
+    const res = await fetch(checkUrl, { headers: { Authorization: `Bearer ${token}` }});
+    if (res.ok) {
+      const data = await res.json();
+      return data.id;
+    }
+  } catch(e) {}
+
+  const createUrl = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${parentId}/children`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${parentId}/children`;
+    
+  const res = await fetch(createUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name: folderName,
+      folder: {},
+      "@microsoft.graph.conflictBehavior": "fail"
+    })
+  });
+  
+  if (res.ok) {
+    const data = await res.json();
+    return data.id;
+  }
+  
+  const checkRes = await fetch(checkUrl, { headers: { Authorization: `Bearer ${token}` }});
+  if (checkRes.ok) {
+    const data = await checkRes.json();
+    return data.id;
+  }
+  throw new Error("Failed to create subfolder " + folderName);
+}
+
+async function getUniqueFilename(token, driveId, folderId, baseName) {
+  const url = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${folderId}/children`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children`;
+    
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }});
+    if (!res.ok) return baseName;
+    const data = await res.json();
+    const children = data.value || [];
+    
+    let suffix = 0;
+    let nameWithoutExt = baseName.substring(0, baseName.lastIndexOf('.'));
+    let ext = baseName.substring(baseName.lastIndexOf('.'));
+    if (nameWithoutExt === '') {
+      nameWithoutExt = baseName;
+      ext = '';
+    }
+    
+    let currentName = baseName;
+    let exists = true;
+    while (exists) {
+      exists = children.some(c => c.name === currentName);
+      if (exists) {
+        suffix++;
+        currentName = `${nameWithoutExt}_${suffix}${ext}`;
+      }
+    }
+    return currentName;
+  } catch(e) {
+    return baseName;
   }
 }
 
-async function uploadSmallFile(token, folderId, filename, mimeType, fileBlob) {
-  const url = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/content`;
+async function uploadFileToOneDrive(token, filename, mimeType, fileBlob, folderId, driveId) {
+  if (fileBlob.size < 4 * 1024 * 1024) {
+    return await uploadSmallFile(token, folderId, filename, mimeType, fileBlob, driveId);
+  } else {
+    return await uploadLargeFile(token, folderId, filename, mimeType, fileBlob, driveId);
+  }
+}
+
+async function uploadSmallFile(token, folderId, filename, mimeType, fileBlob, driveId) {
+  const url = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${folderId}:/${encodeURIComponent(filename)}:/content`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/content`;
   const res = await fetch(url, {
     method: "PUT",
     headers: {
@@ -2131,8 +2265,10 @@ async function uploadSmallFile(token, folderId, filename, mimeType, fileBlob) {
   return data.id;
 }
 
-async function uploadLargeFile(token, folderId, filename, mimeType, fileBlob) {
-  const sessionUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/createUploadSession`;
+async function uploadLargeFile(token, folderId, filename, mimeType, fileBlob, driveId) {
+  const sessionUrl = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${folderId}:/${encodeURIComponent(filename)}:/createUploadSession`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/createUploadSession`;
   const sessionRes = await fetch(sessionUrl, {
     method: "POST",
     headers: {
@@ -2186,8 +2322,10 @@ async function uploadLargeFile(token, folderId, filename, mimeType, fileBlob) {
   throw new Error("Upload session finished but no file ID returned");
 }
 
-async function makeFilePublicAndGetDirectUrl(token, fileId) {
-  const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
+async function makeFilePublicAndGetDirectUrl(token, fileId, driveId) {
+  const url = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${fileId}/createLink`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
   
   // Try to create an embed link first (works best for OneDrive Personal direct downloads)
   let res = await fetch(url, {
