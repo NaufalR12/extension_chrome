@@ -1,3 +1,5 @@
+import { getAccessToken, login } from './auth.js';
+
 document.addEventListener('DOMContentLoaded', () => {
   // UI Elements
   const loginSection = document.getElementById('loginSection');
@@ -96,7 +98,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Check Auth Status
   function checkAuth() {
-    chrome.identity.getAuthToken({ interactive: false }, (token) => {
+    getAccessToken().then((token) => {
       if (token) {
         loginSection.classList.add('hidden');
         userStatusWrapper.classList.remove('hidden');
@@ -162,12 +164,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Login Action
   btnLogin.addEventListener('click', () => {
-    chrome.identity.getAuthToken({ interactive: true }, (token) => {
+    login().then((token) => {
       if (token) {
         checkAuth();
       } else {
         alert("Login failed or cancelled.");
       }
+    }).catch((err) => {
+      console.error(err);
+      alert("Login failed: " + err.message);
     });
   });
 

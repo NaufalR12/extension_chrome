@@ -64,6 +64,49 @@ document.addEventListener("DOMContentLoaded", () => {
   let wasPlayingBeforeSeek = false;
   let draggingEditZone = null; // { id, baseStart, baseEnd, startClientX }
 
+  function normalizeNetworkLogs(logs) {
+    const source = logs && typeof logs === "object" ? logs : {};
+    const normalized = { ...source };
+    const merged = [];
+    const indexByKey = new Map();
+
+    (Array.isArray(source.network) ? source.network : []).forEach((item) => {
+      const key = item && item.requestId
+        ? `requestId:${item.requestId}`
+        : `fallback:${[item?.method || "", item?.url || "", item?.status || "", Math.round(Number(item?.relativeMs) || 0), Math.round(Number(item?.duration) || 0)].join("|")}`;
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex === undefined) {
+        indexByKey.set(key, merged.length);
+        merged.push(item);
+        return;
+      }
+
+      merged[existingIndex] = {
+        ...merged[existingIndex],
+        ...item,
+        requestHeaders: {
+          ...(merged[existingIndex].requestHeaders || {}),
+          ...(item.requestHeaders || {}),
+        },
+        responseHeaders: {
+          ...(merged[existingIndex].responseHeaders || {}),
+          ...(item.responseHeaders || {}),
+        },
+        timing: {
+          ...(merged[existingIndex].timing || {}),
+          ...(item.timing || {}),
+        },
+        traceIds: {
+          ...(merged[existingIndex].traceIds || {}),
+          ...(item.traceIds || {}),
+        },
+      };
+    });
+
+    normalized.network = merged;
+    return normalized;
+  }
+
   // Interaction State
   let isDragging = false;
   let startX, startY;
@@ -80,7 +123,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // 1. Load Logs from SessionStorage
     const savedLogs = sessionStorage.getItem("editLogs");
     if (savedLogs) {
-      sessionLogs = JSON.parse(savedLogs);
+      sessionLogs = normalizeNetworkLogs(JSON.parse(savedLogs));
     }
 
     // 2. Try to get Video from IndexedDB first (most reliable)
@@ -959,7 +1002,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       const newBlob = new Blob(chunks, { type: "video/webm" });
-      const newLogs = syncLogs(sessionLogs, finalCuts);
+      const newLogs = normalizeNetworkLogs(syncLogs(sessionLogs, finalCuts));
 
       try {
         await saveVideoToDB(newBlob);

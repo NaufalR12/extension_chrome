@@ -32,7 +32,7 @@
         <button id="btnRefresh" class="btn secondary">Refresh</button>
       </div>
 
-      <div id="loading" class="loading">Loading files from Google Drive...</div>
+      <div id="loading" class="loading">Loading files from OneDrive...</div>
       <div id="errorMsg" class="error hidden"></div>
 
       <table class="bug-table hidden" id="bugTable">
@@ -97,7 +97,7 @@
           
           <div class="storage-section">
             <div class="storage-header">
-              <span>Google Drive Storage</span>
+              <span>OneDrive Storage</span>
               <span id="storageText">Calculating...</span>
             </div>
             <div class="storage-bar-bg">
@@ -143,7 +143,7 @@
   <div id="deleteModal" class="modal hidden">
     <div class="modal-content text-center">
       <h2>Delete Report?</h2>
-      <p>Choose how you want to delete this report from Google Drive:</p>
+      <p>Choose how you want to delete this report from OneDrive:</p>
       <div class="modal-actions center mt-3" style="flex-direction: column; gap: 10px;">
         <button id="btnConfirmTrash" class="btn secondary" style="width: 100%;">🗑️ Move to Trash (Safe)</button>
         <button id="btnConfirmPermanent" class="btn danger" style="width: 100%;">🔥 Delete Permanently (Irreversible)</button>
@@ -152,6 +152,6 @@
     </div>
   </div>
 
-  <script src="../js/home.js"></script>
+  <script type="module" src="../js/home.js"></script>
 </body>
 </html>

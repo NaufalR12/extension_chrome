@@ -1,3 +1,5 @@
+import { getAccessToken, login } from './auth.js';
+
 let isRecording = false;
 let recordingStartTime = null;
 let isPaused = false;
@@ -87,6 +89,63 @@ function mapCdpTypeToResourceType(cdpType) {
 function isStaticResourceType(type) {
   const t = String(type || '').toLowerCase();
   return !['fetch/xhr', 'ws', 'websocket', 'ping', 'beacon'].includes(t);
+}
+
+function mergeNetworkPayload(target, source) {
+  if (!target || !source) return target || source;
+
+  const assignIfPresent = (key) => {
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
+      target[key] = source[key];
+    }
+  };
+
+  [
+    'requestId', 'method', 'url', 'status', 'type', 'size', 'duration', 'message',
+    'mimeType', 'fromCache', 'fromCDP', 'isMonkeyPatched', 'isStatic', 'frameContext',
+    'startTimeAbs', 'relativeMs', 'encodedDataLength', 'requestPostData', 'payloadText',
+    'requestBody', 'responseBody', 'payloadType', 'payloadPreview', 'parsedPayload',
+    'traceIds', 'stackTrace', 'initiator', 'initiatorType', 'initiatorUrl', 'responseEnd',
+    'receiveHeadersEnd'
+  ].forEach(assignIfPresent);
+
+  if (source.requestHeaders) {
+    target.requestHeaders = { ...(target.requestHeaders || {}), ...source.requestHeaders };
+  }
+  if (source.responseHeaders) {
+    target.responseHeaders = { ...(target.responseHeaders || {}), ...source.responseHeaders };
+  }
+  if (source.requestCookies) target.requestCookies = source.requestCookies;
+  if (source.responseCookies) target.responseCookies = source.responseCookies;
+  if (source.setCookieHeaders) target.setCookieHeaders = source.setCookieHeaders;
+  if (source.timing) target.timing = { ...(target.timing || {}), ...source.timing };
+  if (source.traceIds) target.traceIds = { ...(target.traceIds || {}), ...source.traceIds };
+
+  return target;
+}
+
+function normalizeNetworkLogs(logs) {
+  const source = logs && typeof logs === 'object' ? logs : {};
+  const normalized = { ...source };
+  const merged = [];
+  const indexByKey = new Map();
+
+  (Array.isArray(source.network) ? source.network : []).forEach((item) => {
+    const key = item && item.requestId
+      ? `requestId:${item.requestId}`
+      : `fallback:${[item?.method || '', item?.url || '', item?.status || '', Math.round(Number(item?.relativeMs) || 0), Math.round(Number(item?.duration) || 0)].join('|')}`;
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, merged.length);
+      merged.push(item);
+      return;
+    }
+
+    merged[existingIndex] = mergeNetworkPayload(merged[existingIndex], item);
+  });
+
+  normalized.network = merged;
+  return normalized;
 }
 
 
@@ -189,6 +248,7 @@ chrome.webRequest.onCompleted.addListener(
     }
 
     const logEntry = {
+      requestId: details.requestId,
       method: req.method,
       url: req.url,
       status: req.status || details.statusCode || 200,
@@ -223,6 +283,7 @@ chrome.webRequest.onErrorOccurred.addListener(
     const req = pendingRequests.get(details.requestId);
     if (req) {
       appendLog("NETWORK", {
+        requestId: details.requestId,
         method: req.method,
         url: req.url,
         status: 0,
@@ -337,6 +398,15 @@ async function performAppendLog(type, payload) {
     }
   } else if (type === "BACKEND") logs.backend.push(payload);
   else if (type === "NETWORK") {
+    if (payload.requestId) {
+      const existingById = logs.network.find((n) => n.requestId === payload.requestId);
+      if (existingById) {
+        mergeNetworkPayload(existingById, payload);
+        await chrome.storage.local.set({ sessionLogs: logs });
+        return;
+      }
+    }
+
     if (payload.isMonkeyPatched) {
       const existing = logs.network.find(
         (n) =>
@@ -1639,8 +1709,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     commitUpload(
       request.title,
       request.description,
+      request.folderLink,
+      request.tcName,
+      request.scenarioNum,
+      request.statusBug,
       pendingVideoBase64,
       request.info,
+      request.sessionLogs,
     )
       .then((url) => sendResponse({ success: true, url }))
       .catch((err) => sendResponse({ success: false, error: err.toString() }));
@@ -1857,16 +1932,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-async function commitUpload(title, desc, videoBase64, infoData) {
-  const data = await chrome.storage.local.get(["sessionLogs"]);
-  let logsData = data.sessionLogs || {};
+async function commitUpload(title, desc, folderLink, tcName, scenarioNum, statusBug, videoBase64, infoData, sessionLogsSnapshot) {
+  let logsData = normalizeNetworkLogs(sessionLogsSnapshot || {});
 
   // Wait for log queue to flush if it's still processing
   let retries = 0;
   while (isProcessingQueue && retries < 10) {
     await new Promise((r) => setTimeout(r, 100));
-    const latest = await chrome.storage.local.get(["sessionLogs"]);
-    logsData = latest.sessionLogs || logsData;
     retries++;
   }
 
@@ -1905,16 +1977,43 @@ async function commitUpload(title, desc, videoBase64, infoData) {
 
   logsData.info = finalInfo;
 
-  const token = await new Promise((resolve, reject) => {
-    chrome.identity.getAuthToken({ interactive: true }, (token) => {
-      if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-      else resolve(token);
-    });
-  });
+  let token = await getAccessToken();
+  if (!token) {
+    token = await login();
+  }
 
-  if (!token) throw new Error("Could not authenticate with Google");
+  if (!token) throw new Error("Could not authenticate with OneDrive");
 
-  const folderId = await getOrCreateFolder(token, "BERIBUG_Reports_App");
+  let driveId = null;
+  let targetFolderId = null;
+
+  if (folderLink) {
+    const linkData = await getFolderIdFromLink(token, folderLink);
+    if (linkData) {
+      driveId = linkData.driveId;
+      targetFolderId = linkData.id;
+    } else {
+      throw new Error("Gagal mengakses Folder Share Link yang diberikan.");
+    }
+  } else {
+    targetFolderId = await getOrCreateFolder(token, "BERIBUG_Reports_App");
+  }
+
+  // Create tcName and scenarioNum folders if provided
+  let currentFolderId = targetFolderId;
+  if (tcName) {
+    currentFolderId = await getOrCreateSubFolder(token, driveId, currentFolderId, tcName);
+  }
+  if (scenarioNum) {
+    currentFolderId = await getOrCreateSubFolder(token, driveId, currentFolderId, scenarioNum);
+  }
+
+  // Base names using User Request format: [Scenario]_[Date]_[Status]
+  const timeStamp = new Date().toISOString().split("T")[0]; // YYYY-MM-DD
+  const baseName = `${scenarioNum}_${timeStamp}_${statusBug}`;
+  
+  const videoFileName = await getUniqueFilename(token, driveId, currentFolderId, `${baseName}.webm`);
+  const jsonFileName = await getUniqueFilename(token, driveId, currentFolderId, `${baseName}.json`);
 
   const jsonBlob = new Blob(
     [
@@ -1923,6 +2022,9 @@ async function commitUpload(title, desc, videoBase64, infoData) {
           version: "1.0",
           title: title,
           description: desc,
+          tcName: tcName,
+          scenarioNum: scenarioNum,
+          statusBug: statusBug,
           metadata: {
             date: new Date().toISOString(),
           },
@@ -1962,37 +2064,33 @@ async function commitUpload(title, desc, videoBase64, infoData) {
     throw new Error("Failed to prepare video blob for upload: " + err.message);
   }
 
-  const timeStamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const sanitizedTitle = title.replace(/[^a-zA-Z0-9]/g, "_");
-
-  const videoFileId = await uploadFileToDrive(
+  const videoFileId = await uploadFileToOneDrive(
     token,
-    `BERIBUG_${sanitizedTitle}_${timeStamp}.webm`,
+    videoFileName,
     "video/webm",
     videoBlob,
-    folderId,
+    currentFolderId,
+    driveId
   );
-  const jsonFileId = await uploadFileToDrive(
+  const jsonFileId = await uploadFileToOneDrive(
     token,
-    `BERIBUG_${sanitizedTitle}_${timeStamp}.json`,
+    jsonFileName,
     "application/json",
     jsonBlob,
-    folderId,
+    currentFolderId,
+    driveId
   );
 
-  await makeFilePublic(token, videoFileId);
-  await makeFilePublic(token, jsonFileId); // Make JSON public as well to be read by Player
-
-  // Give Google a moment to propagate permissions
-  await new Promise((r) => setTimeout(r, 1000));
+  const videoDirectUrl = await makeFilePublicAndGetDirectUrl(token, videoFileId, driveId);
+  const jsonDirectUrl = await makeFilePublicAndGetDirectUrl(token, jsonFileId, driveId);
 
   resetLogs();
   pendingVideoBase64 = null;
   chrome.storage.local.remove(["pendingVideo", "pendingReport"]);
   await clearVideoFromDB();
 
-  // Return Hosted Player Web App URL (Netlify Public Link)
-  return `https://dynamic-rabanadas-2b5f0b.netlify.app/?v=${videoFileId}&l=${jsonFileId}`;
+  // Return Hosted Player Web App URL with direct URLs
+  return `https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(videoDirectUrl)}&lUrl=${encodeURIComponent(jsonDirectUrl)}`;
 }
 
 async function getVideoFromDB() {
@@ -2065,103 +2163,319 @@ async function clearVideoFromDB() {
 }
 
 async function getOrCreateFolder(token, folderName) {
-  const query = `name='${folderName}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-  const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`;
-
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const json = await res.json();
-
-  if (json.files && json.files.length > 0) {
-    return json.files[0].id; // Folder exists
+  const checkUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderName}`;
+  try {
+    const res = await fetch(checkUrl, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.id;
+    }
+  } catch (e) {
+    console.warn("Folder check failed, trying to create:", e);
   }
 
   // Create folder
-  const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+  const createUrl = `https://graph.microsoft.com/v1.0/me/drive/root/children`;
+  const createRes = await fetch(createUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       name: folderName,
-      mimeType: "application/vnd.google-apps.folder",
-    }),
-  });
-  const createJson = await createRes.json();
-  return createJson.id;
-}
-
-async function uploadFileToDrive(
-  token,
-  filename,
-  mimeType,
-  fileBlob,
-  folderId,
-) {
-  // 1. Create file metadata
-  const metadata = {
-    name: filename,
-    mimeType: mimeType,
-    parents: [folderId],
-  };
-
-  const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(metadata),
+      folder: {},
+      "@microsoft.graph.conflictBehavior": "fail"
+    })
   });
 
   if (!createRes.ok) {
-    throw new Error(
-      `Failed to create file metadata: ${createRes.status} ${await createRes.text()}`,
-    );
+    // Retry check in case of race condition
+    const checkRes = await fetch(checkUrl, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (checkRes.ok) {
+      const data = await checkRes.json();
+      return data.id;
+    }
+    throw new Error(`Failed to create folder ${folderName}: ${createRes.status} ${await createRes.text()}`);
   }
-
-  const fileData = await createRes.json();
-  const fileId = fileData.id;
-
-  // 2. Upload file content (Simple Media Upload - supports up to 5TB)
-  const uploadRes = await fetch(
-    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
-    {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": mimeType,
-      },
-      body: fileBlob,
-    },
-  );
-
-  if (!uploadRes.ok) {
-    throw new Error(
-      `Failed to upload file content: ${uploadRes.status} ${await uploadRes.text()}`,
-    );
-  }
-
-  return fileId;
+  const data = await createRes.json();
+  return data.id;
 }
 
-async function makeFilePublic(token, fileId) {
-  await fetch(
-    `https://www.googleapis.com/drive/v3/files/${fileId}/permissions`,
-    {
+async function getFolderIdFromLink(token, link) {
+  try {
+    const base64Value = btoa(link)
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_');
+    
+    const res = await fetch(`https://graph.microsoft.com/v1.0/shares/u!${base64Value}/driveItem`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return { id: data.id, driveId: data.parentReference.driveId };
+    }
+  } catch (e) {
+    console.error("Failed to parse/resolve folder link", e);
+  }
+  return null;
+}
+
+async function getOrCreateSubFolder(token, driveId, parentId, folderName) {
+  const checkUrl = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${parentId}:/${encodeURIComponent(folderName)}`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${parentId}:/${encodeURIComponent(folderName)}`;
+    
+  try {
+    const res = await fetch(checkUrl, { headers: { Authorization: `Bearer ${token}` }});
+    if (res.ok) {
+      const data = await res.json();
+      return data.id;
+    }
+  } catch(e) {}
+
+  const createUrl = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${parentId}/children`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${parentId}/children`;
+    
+  const res = await fetch(createUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      name: folderName,
+      folder: {},
+      "@microsoft.graph.conflictBehavior": "fail"
+    })
+  });
+  
+  if (res.ok) {
+    const data = await res.json();
+    return data.id;
+  }
+  
+  const checkRes = await fetch(checkUrl, { headers: { Authorization: `Bearer ${token}` }});
+  if (checkRes.ok) {
+    const data = await checkRes.json();
+    return data.id;
+  }
+  throw new Error("Failed to create subfolder " + folderName);
+}
+
+async function getUniqueFilename(token, driveId, folderId, baseName) {
+  const url = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${folderId}/children`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children`;
+    
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }});
+    if (!res.ok) return baseName;
+    const data = await res.json();
+    const children = data.value || [];
+    
+    let suffix = 0;
+    let nameWithoutExt = baseName.substring(0, baseName.lastIndexOf('.'));
+    let ext = baseName.substring(baseName.lastIndexOf('.'));
+    if (nameWithoutExt === '') {
+      nameWithoutExt = baseName;
+      ext = '';
+    }
+    
+    let currentName = baseName;
+    let exists = true;
+    while (exists) {
+      exists = children.some(c => c.name === currentName);
+      if (exists) {
+        suffix++;
+        currentName = `${nameWithoutExt}_${suffix}${ext}`;
+      }
+    }
+    return currentName;
+  } catch(e) {
+    return baseName;
+  }
+}
+
+async function uploadFileToOneDrive(token, filename, mimeType, fileBlob, folderId, driveId) {
+  if (fileBlob.size < 4 * 1024 * 1024) {
+    return await uploadSmallFile(token, folderId, filename, mimeType, fileBlob, driveId);
+  } else {
+    return await uploadLargeFile(token, folderId, filename, mimeType, fileBlob, driveId);
+  }
+}
+
+async function uploadSmallFile(token, folderId, filename, mimeType, fileBlob, driveId) {
+  const url = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${folderId}:/${encodeURIComponent(filename)}:/content`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/content`;
+  const res = await fetch(url, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": mimeType
+    },
+    body: fileBlob
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to upload small file ${filename}: ${res.status} ${await res.text()}`);
+  }
+  const data = await res.json();
+  return data.id;
+}
+
+async function uploadLargeFile(token, folderId, filename, mimeType, fileBlob, driveId) {
+  const sessionUrl = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${folderId}:/${encodeURIComponent(filename)}:/createUploadSession`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/createUploadSession`;
+  const sessionRes = await fetch(sessionUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      item: {
+        "@microsoft.graph.conflictBehavior": "rename",
+        name: filename
+      }
+    })
+  });
+
+  if (!sessionRes.ok) {
+    throw new Error(`Failed to create upload session: ${sessionRes.status} ${await sessionRes.text()}`);
+  }
+
+  const sessionData = await sessionRes.json();
+  const uploadUrl = sessionData.uploadUrl;
+
+  const fileSize = fileBlob.size;
+  const chunkSize = 327680 * 10; // ~3.2 MB chunks
+  let start = 0;
+
+  while (start < fileSize) {
+    const end = Math.min(start + chunkSize, fileSize);
+    const chunk = fileBlob.slice(start, end);
+
+    const res = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": chunk.size,
+        "Content-Range": `bytes ${start}-${end - 1}/${fileSize}`
+      },
+      body: chunk
+    });
+
+    if (!res.ok) {
+      throw new Error(`Chunk upload failed at range ${start}-${end-1}: ${res.status} ${await res.text()}`);
+    }
+
+    if (res.status === 201 || res.status === 200) {
+      const finishedData = await res.json();
+      return finishedData.id;
+    }
+
+    start = end;
+  }
+
+  throw new Error("Upload session finished but no file ID returned");
+}
+
+async function makeFilePublicAndGetDirectUrl(token, fileId, driveId) {
+  const url = driveId 
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${fileId}/createLink`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
+  
+  // Try to create an embed link first (works best for OneDrive Personal direct downloads)
+  let res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      type: "embed",
+      scope: "anonymous"
+    })
+  });
+
+  let data;
+  if (!res.ok) {
+    // Fallback to "view" if "embed" fails (e.g. for OneDrive for Business)
+    res = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        role: "reader",
-        type: "anyone",
-      }),
-    },
-  );
+        type: "view",
+        scope: "anonymous"
+      })
+    });
+    
+    if (!res.ok) {
+      throw new Error(`Failed to create sharing link: ${res.status} ${await res.text()}`);
+    }
+  }
+
+  data = await res.json();
+  let sharingLink = data.link.webUrl;
+
+  // For embed type, Graph API usually returns an iframe in webHtml
+  if (data.link && data.link.webHtml) {
+    const srcMatch = data.link.webHtml.match(/src="([^"]+)"/);
+    if (srcMatch && srcMatch[1]) {
+      sharingLink = srcMatch[1];
+    }
+  }
+
+  // If we successfully got an embed link, convert it to a direct download link
+  if (sharingLink && sharingLink.includes("embed?")) {
+    return sharingLink.replace("embed?", "download?");
+  }
+
+  // Resolve 1drv.ms shortened link to expanded URL for the old fallback method
+  if (sharingLink && sharingLink.includes("1drv.ms")) {
+    try {
+      let resolveRes = await fetch(sharingLink, {
+        method: "HEAD",
+        redirect: "follow",
+        credentials: "omit"
+      });
+      if (!resolveRes.ok) {
+        resolveRes = await fetch(sharingLink, {
+          method: "GET",
+          redirect: "follow",
+          credentials: "omit"
+        });
+      }
+      sharingLink = resolveRes.url;
+    } catch (e) {
+      console.warn("Failed to resolve 1drv.ms link:", e);
+    }
+  }
+
+  // Check again in case the resolved URL is an embed link
+  if (sharingLink && sharingLink.includes("embed?")) {
+    return sharingLink.replace("embed?", "download?");
+  }
+
+  // Fallback: Convert to direct URL using the shares API
+  const base64Value = btoa(sharingLink);
+  const safeBase64Value = base64Value
+    .replace(/=/g, '')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+
+  return `https://api.onedrive.com/v1.0/shares/u!${safeBase64Value}/root/content`;
 }
 
 async function createMondayTicket(apiKey, boardId, videoUrl, timestamp) {
@@ -2199,7 +2513,7 @@ async function createMondayTicket(apiKey, boardId, videoUrl, timestamp) {
     mutation {
       create_update (
         item_id: ${itemId},
-        body: "Recorded Video & Logs: <br> <a href='${videoUrl}'>View on Google Drive</a>"
+        body: "Recorded Video & Logs: <br> <a href='${videoUrl}'>View on OneDrive</a>"
       ) { id }
     }
   `;

@@ -1,3 +1,5 @@
+import { getAccessToken, login } from './auth.js';
+
 /**
  * BERIBUG Screenshot Preview Page - REFACTORED ARCHITECTURE
  * 
@@ -126,7 +128,7 @@ async function updateScreenshotOnDrive() {
   try {
     const successMessage = getSuccessMessage();
     const fileId = successMessage?.dataset?.driveFileId;
-    if (!fileId) throw new Error('No Drive file id available to update');
+    if (!fileId) throw new Error('No OneDrive file id available to update');
 
     await ensureImageReady();
 
@@ -134,32 +136,28 @@ async function updateScreenshotOnDrive() {
     const imgRes = await fetch(finalImageUrl);
     const imgBlob = await imgRes.blob();
 
-    const title = getScreenshotTitle()?.value || 'Screenshot';
-    const safe = sanitizeTitleForFileName(title);
-
-    const metadata = { name: `BERIBUG_${safe}_${makeTimeStamp()}.png` };
-    const formData = new FormData();
-    formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-    formData.append('file', imgBlob);
-
-    const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&fields=id,webViewLink,webContentLink`, {
-      method: 'PATCH',
-      headers: { Authorization: `Bearer ${authToken}` },
-      body: formData
+    const res = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/content`, {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${authToken}`,
+        'Content-Type': imgBlob.type
+      },
+      body: imgBlob
     });
 
     if (!res.ok) throw new Error('Update failed: ' + res.status);
     const json = await res.json();
 
+    const viewLink = await makeFilePublic(fileId);
+
     const successText = getSuccessText();
     if (successText) {
-      const viewLink = json.webViewLink || `https://drive.google.com/file/d/${json.id}/view`;
       successText.innerHTML = `Link screenshot: <a href="${viewLink}" target="_blank" rel="noreferrer">${viewLink}</a> (terbaru)`;
     }
 
-    alert('Gambar berhasil diperbarui di Drive');
+    alert('Gambar berhasil diperbarui di OneDrive');
   } catch (err) {
-    console.error('[BERIBUG] Update to Drive failed:', err);
+    console.error('[BERIBUG] Update to OneDrive failed:', err);
     alert('Update gagal: ' + err.message);
   }
 }
@@ -823,64 +821,84 @@ async function downloadScreenshot() {
 // ==================== DRIVE UPLOAD ====================
 
 async function initAuth() {
-  return new Promise((resolve) => {
-    chrome.identity.getAuthToken({ interactive: false }, (token) => {
-      if (token) {
-        authToken = token;
-      }
-      resolve();
-    });
-  });
+  authToken = await getAccessToken();
 }
 
 async function getOrCreateFolder() {
-  const query = "name='BERIBUG_Reports_App' and mimeType='application/vnd.google-apps.folder' and trashed=false";
-  const res = await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id)`,
-    { headers: { Authorization: `Bearer ${authToken}` } }
-  );
-  const json = await res.json();
-  if (json.files && json.files.length > 0) return json.files[0].id;
+  const checkUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/BERIBUG_Reports_App`;
+  try {
+    const res = await fetch(checkUrl, {
+      headers: { Authorization: `Bearer ${authToken}` }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.id;
+    }
+  } catch (e) {
+    console.warn("Folder check failed, trying to create:", e);
+  }
 
-  const createRes = await fetch('https://www.googleapis.com/drive/v3/files?fields=id', {
-    method: 'POST',
+  const createUrl = `https://graph.microsoft.com/v1.0/me/drive/root/children`;
+  const createRes = await fetch(createUrl, {
+    method: "POST",
     headers: {
       Authorization: `Bearer ${authToken}`,
-      'Content-Type': 'application/json'
+      "Content-Type": "application/json"
     },
     body: JSON.stringify({
       name: 'BERIBUG_Reports_App',
-      mimeType: 'application/vnd.google-apps.folder'
+      folder: {},
+      "@microsoft.graph.conflictBehavior": "fail"
     })
   });
+
+  if (!createRes.ok) {
+    const checkRes = await fetch(checkUrl, {
+      headers: { Authorization: `Bearer ${authToken}` }
+    });
+    if (checkRes.ok) {
+      const data = await checkRes.json();
+      return data.id;
+    }
+    throw new Error('Gagal membuat folder OneDrive: ' + createRes.status);
+  }
   const createJson = await createRes.json();
-  if (!createJson.id) throw new Error('Gagal membuat folder Drive');
   return createJson.id;
 }
 
 async function uploadMultipart(metadata, fileBlob) {
-  const formData = new FormData();
-  formData.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  formData.append('file', fileBlob);
+  const folderId = metadata.parents[0];
+  const filename = metadata.name;
+  const url = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}:/${encodeURIComponent(filename)}:/content`;
 
-  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink,webContentLink', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${authToken}` },
-    body: formData
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: {
+      Authorization: `Bearer ${authToken}`,
+      'Content-Type': fileBlob.type
+    },
+    body: fileBlob
   });
-  if (!res.ok) throw new Error(`Upload gagal: ${res.status}`);
+  if (!res.ok) throw new Error(`Upload gagal: ${res.status} - ${await res.text()}`);
   return await res.json();
 }
 
 async function makeFilePublic(fileId) {
-  await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
-    method: 'POST',
+  const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}/createLink`;
+  const res = await fetch(url, {
+    method: "POST",
     headers: {
       Authorization: `Bearer ${authToken}`,
-      'Content-Type': 'application/json'
+      "Content-Type": "application/json"
     },
-    body: JSON.stringify({ role: 'reader', type: 'anyone' })
+    body: JSON.stringify({
+      type: "view",
+      scope: "anonymous"
+    })
   });
+  if (!res.ok) throw new Error("Gagal membuat sharing link: " + res.status);
+  const data = await res.json();
+  return data.link.webUrl;
 }
 
 function updateProgress(percent, text) {
@@ -911,17 +929,14 @@ async function saveScreenshotToDrive() {
     await ensureImageReady();
 
     if (!authToken) {
-      return new Promise((resolve, reject) => {
-        chrome.identity.getAuthToken({ interactive: true }, (token) => {
-          if (!token) {
-            alert('Anda harus login dengan Google terlebih dahulu.');
-            reject(new Error('No token'));
-            return;
-          }
-          authToken = token;
-          saveScreenshotToDrive().then(resolve).catch(reject);
-        });
-      });
+      authToken = await getAccessToken();
+    }
+    if (!authToken) {
+      authToken = await login();
+    }
+    if (!authToken) {
+      alert('Anda harus login dengan OneDrive terlebih dahulu.');
+      throw new Error('No token');
     }
 
     const btnSaveToDrive = getBtnSaveToDrive();
@@ -968,13 +983,12 @@ async function saveScreenshotToDrive() {
     const jsonFile = await uploadMultipart(jsonMeta, metaBlob);
 
     updateProgress(80, 'Membuat link...');
-    await makeFilePublic(imgFile.id);
+    const viewLink = await makeFilePublic(imgFile.id);
     await makeFilePublic(jsonFile.id);
 
     updateProgress(100, 'Selesai');
     hideUploadStatus();
 
-    const viewLink = imgFile.webViewLink || `https://drive.google.com/file/d/${imgFile.id}/view`;
     const successText = getSuccessText();
     if (successText) {
       successText.innerHTML = `Link screenshot: <a href="${viewLink}" target="_blank" rel="noreferrer">${viewLink}</a>`;
@@ -1006,7 +1020,7 @@ async function saveScreenshotToDrive() {
     // Do not remove pendingScreenshot so user can continue editing after saving
     if (btnSaveToDrive) btnSaveToDrive.disabled = false;
   } catch (err) {
-    console.error('[BERIBUG] Save to Drive failed:', err);
+    console.error('[BERIBUG] Save to OneDrive failed:', err);
     hideUploadStatus();
     alert('Upload gagal: ' + err.message);
     const btnSaveToDrive = getBtnSaveToDrive();

@@ -28,12 +28,34 @@
         <div class="form-section">
           <div id="stepForm">
             <div class="form-group">
+              <label>Folder Share Link (Optional)</label>
+              <input type="text" id="inputFolderLink" placeholder="Paste OneDrive folder link here...">
+              <small style="color:#888; font-size:11px; display:block; margin-top:4px;">Leave empty to use default BERIBUG_Reports_App folder.</small>
+            </div>
+            <div class="form-row" style="display:flex; gap:10px;">
+              <div class="form-group" style="flex:2;">
+                <label>Nama TC <span style="color:red;">*</span></label>
+                <input type="text" id="inputTC" placeholder="e.g. TC_Login" required>
+              </div>
+              <div class="form-group" style="flex:1;">
+                <label>Nomor Scenario <span style="color:red;">*</span></label>
+                <input type="text" id="inputScenario" placeholder="e.g. SCN01" required>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Status Bug</label>
+              <select id="inputStatus" style="width:100%; padding:8px; border-radius:4px; border:1px solid #ddd; background:#fff;">
+                <option value="FAIL" style="color:red; font-weight:bold;">FAIL</option>
+                <option value="PASS" style="color:green; font-weight:bold;">PASS</option>
+              </select>
+            </div>
+            <div class="form-group">
               <label>Report Title</label>
               <input type="text" id="inputTitle" placeholder="e.g. Broken Login Button on Mobile">
             </div>
             <div class="form-group">
               <label>Description</label>
-              <textarea id="inputDesc" rows="15" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea>
+              <textarea id="inputDesc" rows="4" placeholder="Steps to reproduce, expected vs actual behavior..."></textarea>
             </div>
           </div>
 
@@ -263,6 +285,6 @@
     </div>
   </div>
 
-  <script src="../js/review.js"></script>
+  <script type="module" src="../js/review.js"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3dmjMvLdRCr6iOK7bAg6oC6pGDsLDco4LOSS1tp532EbTIfCtyGwA8pX2S+SkEkDum8y5TB4FXgjVlC0Mau1KAOJZAql7qJizEnRpSZTKlgMDvqdD6bDhw9akS4cQN0L2n+oVkxerFdrgSewbsPyO4Yhd+cf2UKaLr5lyGT1/2S56Ve93PeVWj6BQH0MCcSp/4euDjS09uCBc8IN0BQ35sQt5sxpV9Z+4A4NpSRUOsQqZNc2nyi/a4dPCSd3XxM2xBLL1dzR9m1KGMDtQ5DwNbPc6PpYBNpuU4EEguy5WhqiHOUMdDpZivXepd9sUVYHiDc4iZw5/X1TCmyS9bJgVwIDAQAB",
   "name": "BERIBUG",
   "version": "1.0.0",
   "description": "Tracking & Reporting for Application Crash & Errors",
@@ -20,7 +21,8 @@
   ],
   "host_permissions": [
     "<all_urls>",
-    "https://www.googleapis.com/*",
+    "https://login.microsoftonline.com/*",
+    "https://graph.microsoft.com/*",
     "https://api.monday.com/v2",
     "https://api.country.is/*"
   ],
@@ -44,9 +46,5 @@
       "resources": ["js/injected.js"],
       "matches": ["<all_urls>"]
     }
-  ],
-  "oauth2": {
-    "client_id": "1061102325924-3immmr4ma8f31hdumapkfasg2am6dnr4.apps.googleusercontent.com",
-    "scopes": ["https://www.googleapis.com/auth/drive.file"]
-  }
+  ]
 }
