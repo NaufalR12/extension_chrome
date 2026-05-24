@@ -149,6 +149,93 @@ document.addEventListener('DOMContentLoaded', () => {
     return data.id;
   }
 
+  function getDriveItemCreatedTime(item) {
+    const value = item?.createdDateTime || item?.fileSystemInfo?.createdDateTime || item?.lastModifiedDateTime || 0;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  async function fetchFolderChildren(token, folderId) {
+    const fallbackUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children`;
+
+    const res = await fetch(fallbackUrl, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) {
+      const error = new Error(`Graph request failed: ${res.status}`);
+      error.status = res.status;
+      error.body = await res.text().catch(() => '');
+      throw error;
+    }
+
+    const json = await res.json();
+    const files = Array.isArray(json.value) ? json.value.slice() : [];
+    files.sort((a, b) => getDriveItemCreatedTime(b) - getDriveItemCreatedTime(a));
+    return { ...json, value: files };
+  }
+
+  async function fetchAllFolderItems(token, folderId) {
+    const items = [];
+    const stack = [folderId];
+
+    while (stack.length > 0) {
+      const currentFolderId = stack.pop();
+      const json = await fetchFolderChildren(token, currentFolderId);
+      const children = Array.isArray(json.value) ? json.value : [];
+
+      children.forEach((child) => {
+        if (!child) return;
+        if (child.folder) {
+          stack.push(child.id);
+          return;
+        }
+        items.push(child);
+      });
+    }
+
+    items.sort((a, b) => getDriveItemCreatedTime(b) - getDriveItemCreatedTime(a));
+    return items;
+  }
+
+  function getReportFileInfo(fileName) {
+    const name = String(fileName || '').trim();
+    const dotIndex = name.lastIndexOf('.');
+    if (dotIndex <= 0) {
+      return { baseName: name, extension: '' };
+    }
+
+    return {
+      baseName: name.slice(0, dotIndex),
+      extension: name.slice(dotIndex + 1).toLowerCase()
+    };
+  }
+
+  function buildReportGroup(files) {
+    const bugMap = {};
+
+    files.forEach(f => {
+      if (!f || f.folder) return;
+      const info = getReportFileInfo(f.name);
+      if (!['webm', 'png', 'json'].includes(info.extension)) return;
+
+      const key = info.baseName;
+      if (!bugMap[key]) {
+        bugMap[key] = {
+          id: key,
+          originalTitle: info.baseName.replace(/_/g, ' '),
+          date: new Date(f.createdDateTime || f.fileSystemInfo?.createdDateTime || Date.now())
+        };
+      }
+
+      if (info.extension === 'webm') bugMap[key].videoFile = f;
+      if (info.extension === 'png') bugMap[key].imageFile = f;
+      if (info.extension === 'json') bugMap[key].jsonFile = f;
+      bugMap[key].date = new Date(Math.max(bugMap[key].date.getTime(), getDriveItemCreatedTime(f) || bugMap[key].date.getTime()));
+    });
+
+    return Object.values(bugMap).sort((a, b) => b.date - a.date);
+  }
+
   async function moveFileToFolder(fileId, targetFolderId) {
     const url = `https://graph.microsoft.com/v1.0/me/drive/items/${fileId}`;
     const res = await fetch(url, {
@@ -271,39 +358,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       mainFolderId = await getOrCreateFolder(authToken, "BERIBUG_Reports_App");
-      
-      const fileUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${mainFolderId}/children?$orderby=createdDateTime desc`;
-      const res = await fetch(fileUrl, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      if (!res.ok) throw new Error("Gagal memuat file dari OneDrive: " + res.status);
-      const json = await res.json();
-      const files = json.value || [];
-
-      const bugMap = {};
-
-      files.forEach(f => {
-        if (f.folder) return; // Skip subfolders like Trash
-        const parts = f.name.split('_');
-        if (parts.length >= 3) {
-          const extPart = parts[parts.length - 1]; // TIMESTAMP.ext
-          const tsParts = extPart.split('.');
-          const ts = tsParts[0];
-          const ext = tsParts[1];
-          const rawTitle = parts.slice(1, parts.length - 1).join(' ');
-
-          if (!bugMap[ts]) {
-            bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdDateTime || f.fileSystemInfo?.createdDateTime || Date.now()) };
-          }
-          if (ext === 'webm') bugMap[ts].videoFile = f;
-          if (ext === 'png') bugMap[ts].imageFile = f;
-          if (ext === 'json') bugMap[ts].jsonFile = f;
-        }
-      });
-
-      const bugsArray = Object.values(bugMap)
+      const files = await fetchAllFolderItems(authToken, mainFolderId);
+      const bugsArray = buildReportGroup(files)
         .filter(b => (b.videoFile || b.imageFile) && b.jsonFile)
-        .sort((a,b) => b.date - a.date);
+        ;
 
       if (bugsArray.length === 0) {
         showError("No complete records found.");
@@ -405,37 +463,11 @@ document.addEventListener('DOMContentLoaded', () => {
       mainFolderId = await getOrCreateFolder(authToken, "BERIBUG_Reports_App");
       trashFolderId = await getOrCreateFolder(authToken, "Trash", mainFolderId);
 
-      const fileUrl = `https://graph.microsoft.com/v1.0/me/drive/items/${trashFolderId}/children?$orderby=createdDateTime desc`;
-      const res = await fetch(fileUrl, {
-        headers: { Authorization: `Bearer ${authToken}` }
-      });
-      if (!res.ok) throw new Error("Gagal memuat Trash dari OneDrive: " + res.status);
-      const json = await res.json();
-      const files = json.value || [];
+      const files = await fetchAllFolderItems(authToken, trashFolderId);
 
-      const bugMap = {};
-      files.forEach(f => {
-        if (f.folder) return;
-        const parts = f.name.split('_');
-        if (parts.length >= 3) {
-          const extPart = parts[parts.length - 1];
-          const tsParts = extPart.split('.');
-          const ts = tsParts[0];
-          const ext = tsParts[1];
-          const rawTitle = parts.slice(1, parts.length - 1).join(' ');
-
-          if (!bugMap[ts]) {
-            bugMap[ts] = { id: ts, originalTitle: rawTitle, date: new Date(f.createdDateTime || f.fileSystemInfo?.createdDateTime || Date.now()) };
-          }
-          if (ext === 'webm') bugMap[ts].videoFile = f;
-          if (ext === 'png') bugMap[ts].imageFile = f;
-          if (ext === 'json') bugMap[ts].jsonFile = f;
-        }
-      });
-
-      const bugsArray = Object.values(bugMap)
+      const bugsArray = buildReportGroup(files)
         .filter(b => b.videoFile || b.imageFile || b.jsonFile)
-        .sort((a,b) => b.date - a.date);
+        ;
 
       if (bugsArray.length === 0) {
         showErrorTrash("Trash is empty.");
@@ -657,34 +689,43 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function loadAccountInfo() {
     if (!authToken) return;
+    let userData = {};
+    let driveData = null;
+    let photoUrl = '';
+
     try {
       const userRes = await fetch('https://graph.microsoft.com/v1.0/me', {
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      const userData = await userRes.json();
-      
+      if (!userRes.ok) throw new Error(`User profile failed: ${userRes.status}`);
+      userData = await userRes.json();
+    } catch (e) {
+      console.error("Failed to load user profile:", e);
+    }
+
+    try {
       const driveRes = await fetch('https://graph.microsoft.com/v1.0/me/drive', {
         headers: { Authorization: `Bearer ${authToken}` }
       });
-      const driveData = await driveRes.json();
-
-      let photoUrl = '';
-      try {
-        const photoRes = await fetch('https://graph.microsoft.com/v1.0/me/photo/$value', {
-          headers: { Authorization: `Bearer ${authToken}` }
-        });
-        if (photoRes.ok) {
-          const blob = await photoRes.blob();
-          photoUrl = URL.createObjectURL(blob);
-        }
-      } catch (e) {
-        console.warn("Failed to fetch profile photo:", e);
-      }
-
-      updateSettingsUI(userData, driveData, photoUrl);
-    } catch (e) { 
-      console.error("Failed to load account info:", e); 
+      if (!driveRes.ok) throw new Error(`Drive info failed: ${driveRes.status}`);
+      driveData = await driveRes.json();
+    } catch (e) {
+      console.error("Failed to load drive info:", e);
     }
+
+    try {
+      const photoRes = await fetch('https://graph.microsoft.com/v1.0/me/photo/$value', {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      if (photoRes.ok) {
+        const blob = await photoRes.blob();
+        photoUrl = URL.createObjectURL(blob);
+      }
+    } catch (e) {
+      console.warn("Failed to fetch profile photo:", e);
+    }
+
+    updateSettingsUI(userData, driveData, photoUrl);
   }
 
   function loadAutoDeleteSettings() {
