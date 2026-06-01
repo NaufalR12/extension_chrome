@@ -137,23 +137,30 @@ document.addEventListener("DOMContentLoaded", () => {
       initReviewUI(loadedSessionLogs);
     });
 
-    chrome.runtime.sendMessage({ action: "GET_PENDING_VIDEO" }, (res) => {
-      if (res && res.videoBase64) {
-        try {
-          const byteCharacters = atob(res.videoBase64);
-          const byteNumbers = new Array(byteCharacters.length);
-          for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-          }
-          const byteArray = new Uint8Array(byteNumbers);
-          const blob = new Blob([byteArray], { type: "video/webm" });
-          videoPreview.src = URL.createObjectURL(blob);
-        } catch (e) {
-          console.error("Video decode failed", e);
-          showError("Error decoding video data.");
-        }
+    getVideoFromDB().then((blob) => {
+      if (blob) {
+        videoPreview.src = URL.createObjectURL(blob);
       } else {
-        showError("Error: No video found to review.");
+        // Fallback to message passing for smaller/older videos
+        chrome.runtime.sendMessage({ action: "GET_PENDING_VIDEO" }, (res) => {
+          if (res && res.videoBase64) {
+            try {
+              const byteCharacters = atob(res.videoBase64);
+              const byteNumbers = new Array(byteCharacters.length);
+              for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+              }
+              const byteArray = new Uint8Array(byteNumbers);
+              const fallbackBlob = new Blob([byteArray], { type: "video/webm" });
+              videoPreview.src = URL.createObjectURL(fallbackBlob);
+            } catch (e) {
+              console.error("Video decode failed", e);
+              showError("Error decoding video data.");
+            }
+          } else {
+            showError("Error: No video found to review.");
+          }
+        });
       }
     });
   }
@@ -2340,7 +2347,28 @@ document.addEventListener("DOMContentLoaded", () => {
           "Successfully Updated!";
 
         // Use the Netlify player URL with direct URLs for the share link
-        shareLink.value = `https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(newVUrl)}&lUrl=${encodeURIComponent(newLUrl)}`;
+        const playerUrl = `https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(newVUrl)}&lUrl=${encodeURIComponent(newLUrl)}`;
+        try {
+          const shortId = Math.random().toString(36).substring(2, 8);
+          const firestoreUrl = `https://firestore.googleapis.com/v1/projects/beribug/databases/(default)/documents/links/${shortId}`;
+          const shortRes = await fetch(firestoreUrl, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fields: {
+                longUrl: { stringValue: playerUrl }
+              }
+            })
+          });
+          if (shortRes.ok) {
+            shareLink.value = `https://dynamic-rabanadas-2b5f0b.netlify.app/?id=${shortId}`;
+          } else {
+            shareLink.value = playerUrl;
+          }
+        } catch (e) {
+          console.error("Failed to shorten url:", e);
+          shareLink.value = playerUrl;
+        }
       } catch (err) {
         showError("Failed to update: " + err);
         btnSave.disabled = false;
@@ -2517,6 +2545,26 @@ async function saveVideoToDB(blob) {
       putRequest.onerror = () => reject(putRequest.error);
     };
     request.onerror = () => reject(request.error);
+  });
+}
+
+async function getVideoFromDB() {
+  return new Promise((resolve) => {
+    const request = indexedDB.open("BERIBUG_Storage", 2);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("videos"))
+        db.createObjectStore("videos");
+    };
+    request.onsuccess = (e) => {
+      const db = e.target.result;
+      const transaction = db.transaction("videos", "readonly");
+      const store = transaction.objectStore("videos");
+      const getRequest = store.get("pendingVideo");
+      getRequest.onsuccess = () => resolve(getRequest.result);
+      getRequest.onerror = () => resolve(null);
+    };
+    request.onerror = () => resolve(null);
   });
 }
 

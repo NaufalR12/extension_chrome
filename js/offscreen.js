@@ -45,17 +45,26 @@ async function startRecordingFlow(sendResponse) {
       }
     };
 
-    mediaRecorder.onstop = () => {
+    mediaRecorder.onstop = async () => {
       const blob = new Blob(recordedChunks, { type: 'video/webm' });
       
-      const reader = new FileReader();
-      reader.onloadend = () => {
+      try {
+        await saveVideoToDB(blob);
         chrome.runtime.sendMessage({
           action: 'recordingStopped',
-          base64data: reader.result.split(',')[1] // send base64
+          useDB: true
         });
-      };
-      reader.readAsDataURL(blob);
+      } catch (err) {
+        console.error('Error saving video to DB, falling back to base64', err);
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          chrome.runtime.sendMessage({
+            action: 'recordingStopped',
+            base64data: reader.result.split(',')[1] // send base64
+          });
+        };
+        reader.readAsDataURL(blob);
+      }
       
       stream.getTracks().forEach(track => track.stop());
     };
@@ -66,4 +75,24 @@ async function startRecordingFlow(sendResponse) {
     console.error('Error starting recording:', e);
     sendResponse({ status: 'error', error: e.toString() });
   }
+}
+
+async function saveVideoToDB(blob) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("BERIBUG_Storage", 2);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains("videos"))
+        db.createObjectStore("videos");
+    };
+    request.onsuccess = (e) => {
+      const db = e.target.result;
+      const transaction = db.transaction("videos", "readwrite");
+      const store = transaction.objectStore("videos");
+      const putRequest = store.put(blob, "pendingVideo");
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    };
+    request.onerror = () => reject(request.error);
+  });
 }

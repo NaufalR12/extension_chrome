@@ -128,20 +128,56 @@ function normalizeNetworkLogs(logs) {
   const source = logs && typeof logs === 'object' ? logs : {};
   const normalized = { ...source };
   const merged = [];
-  const indexByKey = new Map();
 
   (Array.isArray(source.network) ? source.network : []).forEach((item) => {
-    const key = item && item.requestId
-      ? `requestId:${item.requestId}`
-      : `fallback:${[item?.method || '', item?.url || '', item?.status || '', Math.round(Number(item?.relativeMs) || 0), Math.round(Number(item?.duration) || 0)].join('|')}`;
-    const existingIndex = indexByKey.get(key);
-    if (existingIndex === undefined) {
-      indexByKey.set(key, merged.length);
-      merged.push(item);
+    if (!item) return;
+    
+    let existingIndex = -1;
+    
+    // Exact requestId match
+    if (item.requestId) {
+      existingIndex = merged.findIndex(m => m.requestId === item.requestId);
+    }
+    
+    // Heuristic matching if not found by requestId
+    if (existingIndex === -1 && item.url) {
+      existingIndex = merged.findIndex(m => {
+        if (m.url !== item.url) return false;
+        if (m.method !== item.method) return false;
+        
+        // Prevent merging two monkey-patched requests together
+        if (m.isMonkeyPatched && item.isMonkeyPatched) return false;
+        // Prevent merging two CDP requests together
+        if (m.fromCDP && item.fromCDP) return false;
+        
+        // Prevent merging two webRequest items (neither is monkey nor CDP)
+        const isMWebReq = !m.isMonkeyPatched && !m.fromCDP;
+        const isItemWebReq = !item.isMonkeyPatched && !item.fromCDP;
+        if (isMWebReq && isItemWebReq) return false;
+
+        const t1 = m.startTimeAbs || 0;
+        const t2 = item.startTimeAbs || 0;
+        
+        // If one of them lacks startTimeAbs, just merge
+        if (t1 === 0 || t2 === 0) return true;
+        
+        return Math.abs(t1 - t2) < 2500; 
+      });
+    }
+
+    if (existingIndex === -1) {
+      merged.push({ ...item });
       return;
     }
 
+    // Preserve the original requestId if we are merging a monkey-patched item into a CDP/WebRequest item
+    const originalReqId = merged[existingIndex].requestId;
+    
     merged[existingIndex] = mergeNetworkPayload(merged[existingIndex], item);
+    
+    if (originalReqId && !merged[existingIndex].requestId?.startsWith('patch_')) {
+      merged[existingIndex].requestId = originalReqId;
+    }
   });
 
   normalized.network = merged;
@@ -1668,8 +1704,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       now: Date.now(),
     });
   } else if (request.action === "recordingStopped") {
-    pendingVideoBase64 = request.base64data;
-    chrome.storage.local.set({ pendingVideo: request.base64data });
+    if (request.useDB) {
+      pendingVideoBase64 = null;
+    } else {
+      pendingVideoBase64 = request.base64data;
+      chrome.storage.local.set({ pendingVideo: request.base64data });
+    }
     chrome.tabs.create({ url: chrome.runtime.getURL("html/review.html") });
     chrome.offscreen.closeDocument();
   }
@@ -2090,7 +2130,26 @@ async function commitUpload(title, desc, folderLink, tcName, scenarioNum, status
   await clearVideoFromDB();
 
   // Return Hosted Player Web App URL with direct URLs
-  return `https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(videoDirectUrl)}&lUrl=${encodeURIComponent(jsonDirectUrl)}`;
+  const playerUrl = `https://dynamic-rabanadas-2b5f0b.netlify.app/?vUrl=${encodeURIComponent(videoDirectUrl)}&lUrl=${encodeURIComponent(jsonDirectUrl)}`;
+  try {
+    const shortId = Math.random().toString(36).substring(2, 8);
+    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/beribug/databases/(default)/documents/links/${shortId}`;
+    const shortRes = await fetch(firestoreUrl, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fields: {
+          longUrl: { stringValue: playerUrl }
+        }
+      })
+    });
+    if (shortRes.ok) {
+      return `https://dynamic-rabanadas-2b5f0b.netlify.app/?id=${shortId}`;
+    }
+  } catch (e) {
+    console.error("Failed to shorten url with Firebase:", e);
+  }
+  return playerUrl;
 }
 
 async function getVideoFromDB() {

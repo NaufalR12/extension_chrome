@@ -392,11 +392,14 @@
       }
     } catch (e) {}
 
+    const uniqueId = 'patch_' + Math.random().toString(36).substring(2, 10) + '_' + performance.now();
+
     // If rawBody is a string (from Request.clone().text()) keep as-is, else pass through serializer
     const bodyInfo = typeof rawBody === 'string' ? await serializeRequestBody(rawBody, contentType) : await serializeRequestBody(rawBody, contentType);
     const maskedBody = maskSensitiveData(bodyInfo.payloadText);
 
     const baseData = {
+      requestId: uniqueId,
       time,
       method,
       url,
@@ -609,7 +612,10 @@
       const bodyInfo = serializeRequestBodySync(rawBody, contentType);
       const maskedBody = maskSensitiveData(bodyInfo.payloadText);
       
+      const uniqueId = 'patch_' + Math.random().toString(36).substring(2, 10) + '_' + performance.now();
+
       const baseData = { 
+        requestId: uniqueId,
         time: new Date().toISOString(), 
         method, 
         url, 
